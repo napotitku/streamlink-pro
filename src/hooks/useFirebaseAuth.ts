@@ -7,6 +7,7 @@ export interface UseFirebaseAuthResult {
     user: User | null;
     authReady: boolean;       // true once Firebase has resolved the initial auth state
     isAuthorized: boolean;    // true if user is signed in AND in the allowedUsers allowlist
+    isSigningIn: boolean;
     signIn: () => Promise<void>;
     signOut: () => Promise<void>;
 }
@@ -26,6 +27,7 @@ export const useFirebaseAuth = (): UseFirebaseAuthResult => {
     const [user, setUser] = useState<User | null>(null);
     const [authReady, setAuthReady] = useState(false);
     const [isAuthorized, setIsAuthorized] = useState(false);
+    const [isSigningIn, setIsSigningIn] = useState(false);
 
     const checkAuthorization = useCallback(async (firebaseUser: User) => {
         try {
@@ -50,11 +52,14 @@ export const useFirebaseAuth = (): UseFirebaseAuthResult => {
     }, [checkAuthorization]);
 
     const signIn = useCallback(async () => {
+        setIsSigningIn(true);
         try {
             await signInWithPopup(auth, googleProvider);
             // onAuthStateChanged fires automatically after sign-in
         } catch (err) {
             console.error('[FirebaseAuth] Google sign-in failed:', err);
+        } finally {
+            setIsSigningIn(false);
         }
     }, []);
 
@@ -62,5 +67,5 @@ export const useFirebaseAuth = (): UseFirebaseAuthResult => {
         await firebaseSignOut(auth);
     }, []);
 
-    return { user, authReady, isAuthorized, signIn, signOut };
+    return { user, authReady, isAuthorized, isSigningIn, signIn, signOut };
 };
