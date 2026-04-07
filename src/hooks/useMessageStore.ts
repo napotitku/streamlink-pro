@@ -1,7 +1,6 @@
 import { useState, useCallback, useEffect } from 'react';
 import { AppState, ChatMessage, StreamStats, Platform } from '@/types';
-import { ref, set } from 'firebase/database';
-import { db } from '@/src/firebase';
+import { syncService } from '@/services/syncService';
 
 const syncChannel = new BroadcastChannel('streamlink_sync');
 
@@ -25,33 +24,15 @@ export const useMessageStore = (settings: { autoDismissEnabled: boolean; autoDis
     const broadcastFeatured = useCallback((msg: ChatMessage | null) => {
         const featuredAt = msg ? Date.now() : null;
         const payload = {
-            type: msg ? 'SET_FEATURED' : 'CLEAR_FEATURED',
-            payload: msg ? { ...msg, featuredAt } : null,
+            type: msg ? 'SET_FEATURED' as const : 'CLEAR_FEATURED' as const,
+            payload: msg ? { ...msg, featuredAt: featuredAt as number } : null,
             timestamp: Date.now(),
             autoDismissEnabled: settings.autoDismissEnabled,
             autoDismissSeconds: settings.autoDismissSeconds,
-            featuredAt: featuredAt
+            featuredAt,
         };
 
-        // Sanitize payload for Firebase (remove undefined)
-        const sanitizeForFirebase = (obj: any): any => {
-            if (obj === null || obj === undefined) return null;
-            if (typeof obj !== 'object') return obj;
-            if (obj instanceof Date) return obj.toISOString();
-
-            const result: any = Array.isArray(obj) ? [] : {};
-            for (const key in obj) {
-                const val = obj[key];
-                if (val !== undefined) {
-                    result[key] = sanitizeForFirebase(val);
-                }
-            }
-            return result;
-        };
-
-        const safePayload = sanitizeForFirebase(payload);
-
-        set(ref(db, 'currentComment'), safePayload);
+        syncService.setFeaturedMessage(payload);
 
         syncChannel.postMessage(payload);
         localStorage.setItem('streamlink_sync_event', JSON.stringify(payload));

@@ -1,7 +1,8 @@
 
 import React from 'react';
 import { ChatMessage } from '../types';
-import { Youtube, CheckCircle, Send, MessageSquareDashed, Sparkles, Bookmark, Trash2, XCircle, Coins } from 'lucide-react';
+import { CheckCircle, Send, MessageSquareDashed, Sparkles, Bookmark, Trash2, XCircle, Coins } from 'lucide-react';
+import { TwitchIcon, YouTubeIcon } from '@/components/icons/PlatformIcons';
 
 interface MessageItemProps {
   message: ChatMessage;
@@ -71,9 +72,9 @@ const MessageItem: React.FC<MessageItemProps> = ({ message, onFeature, onMarkRea
 
             <div className={`absolute -bottom-1 -right-1 w-5 h-5 rounded-full border-2 border-slate-900 flex items-center justify-center shadow-lg transition-transform ${isTwitch ? 'bg-[#9146FF]' : 'bg-[#FF0000]'}`}>
               {isTwitch ? (
-                <svg className="w-2.5 h-2.5 text-white fill-current" viewBox="0 0 24 24"><path d="M11.571 4.714h1.715v5.143H11.57V4.714zm4.715 0H18v5.143h-1.714V4.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h3.428L22.286 12V0H6zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714v9.429z" /></svg>
+                <TwitchIcon className="w-2.5 h-2.5 text-white fill-current" />
               ) : (
-                <svg className="w-3 h-3 text-white fill-current" viewBox="0 0 24 24" fill="none"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814z" fill="white" /><path d="M9.545 15.568V8.432L15.818 12l-6.273 3.568z" fill="#FF0000" /></svg>
+                <YouTubeIcon className="w-3 h-3" />
               )}
             </div>
           </div>

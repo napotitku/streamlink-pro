@@ -2,8 +2,7 @@ import { useRef, useEffect, useState } from 'react';
 import { AppSettings, ChatMessage, StreamStats, HypeTrainData } from '@/types';
 import { TwitchChatClient } from '@/services/twitchService';
 import { YouTubeChatClient } from '@/services/youtubeService';
-import { ref, set, onValue, get } from 'firebase/database';
-import { db } from '@/src/firebase';
+import { syncService } from '@/services/syncService';
 
 interface UseChatConnectionProps {
     settings: AppSettings;
@@ -11,9 +10,10 @@ interface UseChatConnectionProps {
     updateStats: (platform: 'twitch' | 'youtube', stats: Partial<StreamStats>) => void;
     incrementQuota: (units: number) => void;
     readOnly?: boolean;
+    authReady?: boolean;
 }
 
-export const useChatConnection = ({ settings, addMessage, updateStats, incrementQuota, readOnly = false }: UseChatConnectionProps) => {
+export const useChatConnection = ({ settings, addMessage, updateStats, incrementQuota, readOnly = false, authReady = false }: UseChatConnectionProps) => {
     const twitchClient = useRef<TwitchChatClient | null>(null);
     const youtubeClient = useRef<YouTubeChatClient | null>(null);
     const [hypeTrain, setHypeTrain] = useState<HypeTrainData | null>(null);
@@ -62,13 +62,10 @@ export const useChatConnection = ({ settings, addMessage, updateStats, increment
                         if (!hypeTrainData) return;
                     }
 
-                    // Write to Firebase instead of local state directly
-                    // Only write if NOT in read-only mode (prevent Overlay from overwriting)
-                    if (!readOnly) {
-                        set(ref(db, 'hypeTrain'), hypeTrainData);
-                    } else {
-                        // If read-only (Overlay), update local state directly since we can't write to DB
-                        // This ensures Overlay works even if Dashboard is closed
+                    // Write to Firebase — only when authenticated AND not in read-only mode
+                    if (!readOnly && authReady) {
+                        syncService.setHypeTrain(hypeTrainData);
+                    } else if (readOnly) {
                         setHypeTrain(hypeTrainData);
                     }
                 },
@@ -81,14 +78,8 @@ export const useChatConnection = ({ settings, addMessage, updateStats, increment
                     });
                 },
                 (category, message) => {
-                    // Debug Logging to Firebase
-                    const logRef = ref(db, `debug_logs/hype_train/${Date.now()}`);
-                    set(logRef, {
-                        timestamp: new Date().toISOString(),
-                        category,
-                        message,
-                        readOnly
-                    });
+                    if (!authReady) return;
+                    syncService.logHypeTrainEvent(category, message, readOnly);
                 }
             );
             twitchClient.current.connect();
@@ -128,34 +119,19 @@ export const useChatConnection = ({ settings, addMessage, updateStats, increment
     ]);
 
     const simulateHypeTrain = (data: HypeTrainData | null) => {
-        // Write to Firebase
-        if (data) {
-            set(ref(db, 'hypeTrain'), { ...data, isTest: true });
-        } else {
-            set(ref(db, 'hypeTrain'), null);
-        }
+        if (!authReady) return;
+        syncService.setHypeTrain(data ? { ...data, isTest: true } : null);
     };
 
-    // Listen for Hype Train updates from Firebase
     useEffect(() => {
-        const hypeTrainRef = ref(db, 'hypeTrain');
-        const unsubscribe = onValue(hypeTrainRef, (snapshot) => {
-            const data = snapshot.val();
-            setHypeTrain(data);
-        });
+        const unsubscribe = syncService.listenToHypeTrain(setHypeTrain);
 
-        // Clear simulation on mount (if this is the Dashboard)
-        if (!readOnly) {
-            get(hypeTrainRef).then(snapshot => {
-                const data = snapshot.val();
-                if (data?.isTest) {
-                    set(hypeTrainRef, null);
-                }
-            });
+        if (!readOnly && authReady) {
+            syncService.clearSimulatedHypeTrain();
         }
 
-        return () => unsubscribe();
-    }, [readOnly]);
+        return unsubscribe;
+    }, [readOnly, authReady]);
 
     return {
         twitchClient,

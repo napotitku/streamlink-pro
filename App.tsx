@@ -4,16 +4,22 @@ import { ChatMessage, Platform } from './types';
 import Dashboard from './components/Dashboard';
 import Overlay from './components/Overlay';
 import SettingsModal from './components/SettingsModal';
-import { Youtube, Play, Info } from 'lucide-react';
+import LoginPage from './components/LoginPage';
+import { Play, Info } from 'lucide-react';
 import { useAppSettings } from '@/src/hooks/useAppSettings';
 import { useMessageStore } from '@/src/hooks/useMessageStore';
 import { useChatConnection } from '@/src/hooks/useChatConnection';
+import { useFirebaseAuth } from '@/src/hooks/useFirebaseAuth';
 import AuthHandler from './components/AuthHandler';
 
 const App: React.FC = () => {
   const location = useLocation();
   const { settings, setSettings, quotaUsage, setQuotaUsage, incrementQuota } = useAppSettings();
+  const { user, authReady, isAuthorized, isSigningIn, signIn, signOut } = useFirebaseAuth();
 
+  const isOverlay = location.pathname.includes('/overlay');
+
+  // All hooks must be called unconditionally — auth gating happens in the return below.
   const {
     state: messageState,
     addMessage,
@@ -31,12 +37,16 @@ const App: React.FC = () => {
     addMessage,
     updateStats,
     incrementQuota,
-    readOnly: location.pathname.includes('/overlay') // Overlay should not write to Firebase
+    // Only mark auth ready for writes when the user is actually authorized (or it's the overlay)
+    authReady: authReady && (isOverlay || isAuthorized),
+    readOnly: isOverlay
   });
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [showLaunchPrompt, setShowLaunchPrompt] = useState(false);
   const autoDismissTimerRef = useRef<number | null>(null);
+
+
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -259,6 +269,16 @@ const App: React.FC = () => {
   }, [settings.twitchClientId]);
 
   return (
+    <>
+      {/* Auth gate: loading splash or login page for non-overlay routes */}
+      {!isOverlay && !authReady && (
+        <div className="h-screen w-full bg-slate-950" />
+      )}
+      {!isOverlay && authReady && (!user || !isAuthorized) && (
+        <LoginPage onSignIn={signIn} user={user} isLoading={isSigningIn} />
+      )}
+      {/* Main app — rendered when authorized or on the overlay route */}
+      {(isOverlay || (authReady && isAuthorized)) && (
     <div className={`h-screen w-full flex flex-col overflow-hidden ${location.pathname.includes('overlay') ? 'bg-transparent' : 'bg-slate-950'}`}>
       <Routes>
         <Route
@@ -291,8 +311,12 @@ const App: React.FC = () => {
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-300">
           <div className="bg-slate-900 border border-slate-800 w-full max-w-md rounded-3xl shadow-2xl p-8 space-y-6 animate-in zoom-in-95 duration-300">
             <div className="flex flex-col items-center text-center space-y-3">
-              <div className="w-16 h-16 bg-red-500/10 rounded-2xl flex items-center justify-center text-red-500">
-                <Youtube size={32} />
+              <div className="w-16 h-16 bg-red-500/10 rounded-2xl flex items-center justify-center">
+                {/* Official YouTube icon — must not be modified per YouTube Branding Guidelines */}
+                <svg viewBox="0 0 24 24" width="32" height="32" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814z" fill="#FF0000"/>
+                  <path d="M9.545 15.568V8.432L15.818 12l-6.273 3.568z" fill="#FFFFFF"/>
+                </svg>
               </div>
               <h2 className="text-2xl font-black text-white tracking-tight">Launch Stream</h2>
               <p className="text-slate-400 text-sm leading-relaxed">
@@ -362,6 +386,8 @@ const App: React.FC = () => {
         />
       )}
     </div>
+      )}
+    </>
   );
 };
 
