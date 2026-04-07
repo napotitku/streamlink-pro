@@ -2,20 +2,26 @@
     "rules": {
         ".read": false,
         ".write": false,
+        "allowedUsers": {
+            "$uid": {
+                ".read": "auth != null && auth.uid == $uid",
+                ".write": false
+            }
+        },
         "currentComment": {
             ".read": true,
-            ".write": true,
+            ".write": "auth != null && root.child('allowedUsers').child(auth.uid).val() === true",
             ".validate": "!newData.exists() || newData.hasChildren(['type', 'timestamp'])"
         },
         "hypeTrain": {
             ".read": true,
-            ".write": true
+            ".write": "auth != null && root.child('allowedUsers').child(auth.uid).val() === true"
         },
         "debug_logs": {
             "hype_train": {
                 "$logId": {
                     ".read": false,
-                    ".write": true,
+                    ".write": "auth != null && root.child('allowedUsers').child(auth.uid).val() === true",
                     ".validate": "newData.hasChildren(['timestamp'])"
                 }
             }

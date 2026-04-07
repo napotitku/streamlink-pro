@@ -27,6 +27,8 @@ export interface StreamStats {
   status: 'online' | 'offline' | 'connecting' | 'error';
   title: string;
   errorMessage?: string;
+  /** True when the Helix streams endpoint confirms an active broadcast. Distinct from `status === 'online'` which only means the IRC/API connection is up. */
+  isLive?: boolean;
 }
 
 export interface AppSettings {

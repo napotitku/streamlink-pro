@@ -1,8 +1,10 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AppState, ChatMessage, StreamStats, HypeTrainData } from '../types';
 import MessageItem from './MessageItem';
 import { PinnedMessagesWidget } from './PinnedMessagesWidget';
+import { TwitchIcon, YouTubeIcon } from './icons/PlatformIcons';
+import { Virtuoso, VirtuosoHandle } from 'react-virtuoso';
 import {
   Settings,
   Copy,
@@ -77,14 +79,21 @@ const StatusIndicator: React.FC<{
   const isOnline = stats.status === 'online';
   const isConnecting = stats.status === 'connecting';
   const isError = stats.status === 'error';
+  const isLive = isOnline && !!stats.isLive;
   const isQuotaError = stats.errorMessage?.includes('Quota');
 
   return (
-    <div className={`p-3 rounded-xl bg-slate-900 border transition-colors flex flex-col min-h-[84px] ${isError ? 'border-red-500/50' : isOnline ? 'border-emerald-500/20' : 'border-slate-800'}`}>
+    <div className={`p-3 rounded-xl bg-slate-900 border transition-colors flex flex-col min-h-[84px] ${isError ? 'border-red-500/50' : isLive ? 'border-red-500/30' : isOnline ? 'border-emerald-500/20' : 'border-slate-800'}`}>
       <div className="text-slate-500 text-[10px] mb-1 flex items-center justify-between gap-1 uppercase font-bold tracking-wider">
         <span className="flex items-center gap-1">{icon} {platform}</span>
         {isConnecting && <Loader2 size={10} className="animate-spin text-indigo-400" />}
         {isError && <AlertCircle size={10} className="text-red-500" />}
+        {isLive && (
+          <span className="flex items-center gap-1 text-red-500">
+            <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+            LIVE
+          </span>
+        )}
       </div>
       {isError ? (
         <div className="mt-auto flex flex-col">
@@ -111,9 +120,13 @@ const StatusIndicator: React.FC<{
         </div>
       ) : (
         <div className="mt-auto flex flex-col">
-          <span className="text-white font-mono font-bold text-xl">{stats.viewers.toLocaleString()}</span>
-          <span className={`${isOnline ? 'text-emerald-500' : isConnecting ? 'text-indigo-400' : 'text-slate-600'} text-[9px] font-bold uppercase tracking-widest`}>
-            {isConnecting ? 'connecting' : isOnline ? 'online' : 'offline'}
+          <span className={`font-mono font-bold text-xl ${isLive ? 'text-white' : 'text-slate-500'}`}>
+            {stats.viewers.toLocaleString()}
+          </span>
+          <span className={`text-[9px] font-bold uppercase tracking-widest ${
+            isLive ? 'text-red-400' : isOnline ? 'text-emerald-500' : isConnecting ? 'text-indigo-400' : 'text-slate-600'
+          }`}>
+            {isConnecting ? 'connecting' : isLive ? 'live' : isOnline ? 'connected' : 'offline'}
           </span>
         </div>
       )}
@@ -220,6 +233,7 @@ const Dashboard: React.FC<DashboardProps> = ({
   onTwitchLogin
 }) => {
   const [copied, setCopied] = useState(false);
+  const virtuosoRef = useRef<VirtuosoHandle>(null);
 
   const copyOverlayUrl = () => {
     const url = `${window.location.origin}${window.location.pathname}#/overlay`;
@@ -228,15 +242,19 @@ const Dashboard: React.FC<DashboardProps> = ({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleScrollToMessage = (id: string) => {
-    const element = document.getElementById(`message-${id}`);
-    if (element) {
-      element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      // Use standard CSS class for highlighting if Tailwind safelist permits, or inline style
-      element.classList.add('ring-2', 'ring-emerald-500');
-      setTimeout(() => element.classList.remove('ring-2', 'ring-emerald-500'), 1000);
-    }
-  };
+  const handleScrollToMessage = useCallback((id: string) => {
+    const index = state.messages.findIndex(m => m.id === id);
+    if (index === -1) return;
+    virtuosoRef.current?.scrollToIndex({ index, behavior: 'smooth', align: 'center' });
+    // After scrolling, highlight the element once it’s rendered
+    setTimeout(() => {
+      const el = document.getElementById(`message-${id}`);
+      if (el) {
+        el.classList.add('ring-2', 'ring-emerald-500');
+        setTimeout(() => el.classList.remove('ring-2', 'ring-emerald-500'), 1000);
+      }
+    }, 300);
+  }, [state.messages]);
 
   const unreadCount = state.messages.filter(m => !m.isRead).length;
 
@@ -284,8 +302,9 @@ const Dashboard: React.FC<DashboardProps> = ({
             </div>
           </header>
 
-          <div className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-3 pb-24">
-            {state.messages.length === 0 ? (
+          {/* Virtualized message list — only visible rows are in the DOM */}
+          {state.messages.length === 0 ? (
+            <div className="flex-1 overflow-y-auto">
               <div className="h-full flex flex-col items-center justify-center text-slate-600 space-y-4">
                 <div className="p-6 rounded-full bg-slate-800/50 animate-pulse">
                   <Zap size={48} className="opacity-20" />
@@ -301,29 +320,40 @@ const Dashboard: React.FC<DashboardProps> = ({
                   </button>
                 </div>
               </div>
-            ) : (
-              <>
-                {/* Interaction Tips Banner */}
-                <div className="flex flex-wrap items-center gap-x-6 gap-y-2 px-3 py-2.5 mb-2 bg-indigo-500/5 rounded-xl border border-indigo-500/10">
-                  <div className="flex items-center gap-2 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                    <MousePointer2 size={12} className="text-indigo-500" />
-                    Click: Feature
+            </div>
+          ) : (
+            <Virtuoso
+              ref={virtuosoRef}
+              className="flex-1 custom-scrollbar"
+              style={{ flex: '1 1 auto', minHeight: 0 }}
+              data={state.messages}
+              followOutput="smooth"
+              components={{
+                Header: () => (
+                  <div className="flex flex-wrap items-center gap-x-6 gap-y-2 px-4 pt-4 pb-2">
+                    <div className="flex flex-wrap items-center gap-x-6 gap-y-2 px-3 py-2.5 w-full bg-indigo-500/5 rounded-xl border border-indigo-500/10">
+                      <div className="flex items-center gap-2 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                        <MousePointer2 size={12} className="text-indigo-500" />
+                        Click: Feature
+                      </div>
+                      <div className="flex items-center gap-2 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                        <Bookmark size={12} className="text-amber-500" />
+                        Right-Click: Interesting
+                      </div>
+                      <div className="flex items-center gap-2 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                        <Trash2 size={12} className="text-red-500" />
+                        Trash Icon: Trash/Done
+                      </div>
+                      <div className="flex items-center gap-2 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                        <Keyboard size={12} className="text-slate-200" />
+                        ESC: Clear Featured
+                      </div>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                    <Bookmark size={12} className="text-amber-500" />
-                    Right-Click: Interesting
-                  </div>
-                  <div className="flex items-center gap-2 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                    <Trash2 size={12} className="text-red-500" />
-                    Trash Icon: Trash/Done
-                  </div>
-                  <div className="flex items-center gap-2 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                    <Keyboard size={12} className="text-slate-200" />
-                    ESC: Clear Featured
-                  </div>
-                </div>
-
-                {state.messages.map(msg => (
+                ),
+              }}
+              itemContent={(_index, msg) => (
+                <div className="px-4 pb-3">
                   <MessageItem
                     key={msg.id}
                     message={msg}
@@ -332,10 +362,10 @@ const Dashboard: React.FC<DashboardProps> = ({
                     onMarkTrash={onMarkTrash}
                     onToggleInteresting={onToggleInteresting}
                   />
-                ))}
-              </>
-            )}
-          </div>
+                </div>
+              )}
+            />
+          )}
         </section>
 
         <section className="w-full md:w-80 lg:w-96 bg-slate-950 flex flex-col p-6 space-y-6 overflow-y-auto custom-scrollbar">
@@ -347,13 +377,13 @@ const Dashboard: React.FC<DashboardProps> = ({
               <StatusIndicator
                 platform="Twitch"
                 stats={state.stats.twitch}
-                icon={<svg className="w-3 h-3 text-purple-400 fill-current" viewBox="0 0 24 24"><path d="M11.571 4.714h1.715v5.143H11.57V4.714zm4.715 0H18v5.143h-1.714V4.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h3.428L22.286 12V0H6zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714v9.429z" /></svg>}
+                icon={<TwitchIcon className="w-3 h-3 text-purple-400 fill-current" />}
                 onReconnect={(state.stats.twitch.status === 'error' || state.stats.twitch.status === 'offline') ? onTwitchLogin : undefined}
               />
               <StatusIndicator
                 platform="YouTube"
                 stats={state.stats.youtube}
-                icon={<svg className="w-3 h-3" viewBox="0 0 24 24" fill="none"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814z" fill="#FF0000" /><path d="M9.545 15.568V8.432L15.818 12l-6.273 3.568z" fill="black" /></svg>}
+                icon={<YouTubeIcon className="w-3 h-3" />}
               />
             </div>
           </div>
@@ -397,9 +427,9 @@ const Dashboard: React.FC<DashboardProps> = ({
                     />
                     <div className={`absolute -bottom-1 -right-1 w-6 h-6 rounded-full border-2 border-slate-950 flex items-center justify-center ${state.featuredMessage.platform === 'twitch' ? 'bg-purple-600' : 'bg-red-600'}`}>
                       {state.featuredMessage.platform === 'twitch' ? (
-                        <svg className="w-2.5 h-2.5 text-white fill-current" viewBox="0 0 24 24"><path d="M11.571 4.714h1.715v5.143H11.57V4.714zm4.715 0H18v5.143h-1.714V4.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h3.428L22.286 12V0H6zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714v9.429z" /></svg>
+                        <TwitchIcon className="w-2.5 h-2.5 text-white fill-current" />
                       ) : (
-                        <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814z" fill="white" /><path d="M9.545 15.568V8.432L15.818 12l-6.273 3.568z" fill="#FF0000" /></svg>
+                        <YouTubeIcon className="w-2.5 h-2.5" />
                       )}
                     </div>
                   </div>

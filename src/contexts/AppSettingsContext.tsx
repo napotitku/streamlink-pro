@@ -73,7 +73,15 @@ export const AppSettingsProvider: React.FC<{ children: ReactNode }> = ({ childre
     });
 
     useEffect(() => {
-        const { youtubeVideoId, ...persistentSettings } = settings;
+        // Strip all sensitive credentials from localStorage — they are sourced from
+        // import.meta.env on every load, so omitting them here has no functional impact.
+        const {
+            youtubeVideoId,       // always reset on load
+            twitchAccessToken,    // OAuth token — must never be persisted
+            twitchClientId,       // API credential
+            youtubeApiKey,        // API credential
+            ...persistentSettings
+        } = settings;
         localStorage.setItem('streamlink_settings', JSON.stringify(persistentSettings));
     }, [settings]);
 

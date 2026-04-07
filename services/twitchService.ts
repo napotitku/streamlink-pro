@@ -1,361 +1,319 @@
-import { ChatMessage, HypeTrainData } from "../types";
+import * as tmi from 'tmi.js';
+import { ChatMessage, HypeTrainData, StreamStats } from '../types';
 
+/**
+ * TwitchChatClient
+ *
+ * Chat is now handled by tmi.js, which owns IRC parsing, PING/PONG,
+ * reconnection, and all tag extraction. Stats and Hype Train polling
+ * continue to hit the Helix REST API directly — they are independent
+ * of the IRC connection.
+ */
 export class TwitchChatClient {
-  private socket: WebSocket | null = null;
-  private channel: string;
-  private accessToken?: string;
-  private clientId?: string;
-  private onMessage: (msg: ChatMessage) => void;
-  private onStatsUpdate?: (stats: { viewers: number }) => void;
-  private onHypeTrainUpdate?: (hypeTrain: HypeTrainData | null) => void;
-  private onStatusChange?: (status: 'online' | 'error' | 'connecting', error?: string) => void;
-  private statsTimer: any = null;
-  private hypeTrainTimer: any = null;
+    private client: tmi.Client | null = null;
+    private channel: string;
+    private accessToken?: string;
+    private clientId?: string;
+    private onMessage: (msg: ChatMessage) => void;
+    private onStatsUpdate?: (stats: Partial<StreamStats>) => void;
+    private onHypeTrainUpdate?: (hypeTrain: HypeTrainData | null) => void;
+    private onStatusChange?: (status: 'online' | 'error' | 'connecting', error?: string) => void;
+    private statsTimer: ReturnType<typeof setTimeout> | null = null;
+    private hypeTrainTimer: ReturnType<typeof setTimeout> | null = null;
+    private isDisconnecting = false;
+    private logDebug?: (category: string, message: string) => void;
+    private lastLogMessage: string | null = null;
 
-  // Resilience state
-  private reconnectAttempts = 0;
-  private reconnectTimer: any = null;
-  private maxReconnectAttempts = 10;
-  private isDisconnecting = false;
+    constructor(
+        channel: string,
+        onMessage: (msg: ChatMessage) => void,
+        onStatsUpdate?: (stats: Partial<StreamStats>) => void,
+        onHypeTrainUpdate?: (hypeTrain: HypeTrainData | null) => void,
+        accessToken?: string,
+        clientId?: string,
+        onStatusChange?: (status: 'online' | 'error' | 'connecting', error?: string) => void,
+        logDebug?: (category: string, message: string) => void
+    ) {
+        this.channel = channel.toLowerCase();
+        this.onMessage = onMessage;
+        this.onStatsUpdate = onStatsUpdate;
+        this.onHypeTrainUpdate = onHypeTrainUpdate;
+        this.accessToken = accessToken;
+        this.clientId = clientId;
+        this.onStatusChange = onStatusChange;
+        // Deduplicate log calls to avoid Firebase write spam
+        this.logDebug = logDebug ? (category, message) => {
+            const key = `${category}:${message}`;
+            if (this.lastLogMessage !== key) {
+                this.lastLogMessage = key;
+                logDebug(category, message);
+            }
+        } : undefined;
+    }
 
-  private logDebug?: (category: string, message: string) => void;
-  private lastLogMessage: string | null = null; // Prevent spamming duplicate logs
+    connect() {
+        this.isDisconnecting = false;
+        this.onStatusChange?.('connecting');
 
-  constructor(
-    channel: string,
-    onMessage: (msg: ChatMessage) => void,
-    onStatsUpdate?: (stats: { viewers: number }) => void,
-    onHypeTrainUpdate?: (hypeTrain: HypeTrainData | null) => void,
-    accessToken?: string,
-    clientId?: string,
-    onStatusChange?: (status: 'online' | 'error' | 'connecting', error?: string) => void,
-    logDebug?: (category: string, message: string) => void
-  ) {
-    this.channel = channel.toLowerCase();
-    this.onMessage = onMessage;
-    this.onStatsUpdate = onStatsUpdate;
-    this.onHypeTrainUpdate = onHypeTrainUpdate;
-    this.accessToken = accessToken;
-    this.clientId = clientId;
-    this.onStatusChange = onStatusChange;
-    // WRAP logDebug to filter duplicates
-    this.logDebug = logDebug ? (category, message) => {
-      const key = `${category}:${message}`;
-      if (this.lastLogMessage !== key) {
-        this.lastLogMessage = key;
-        logDebug(category, message);
-      }
-    } : undefined;
-  }
+        this.client = new tmi.Client({
+            // Anonymous read-only connection — no identity needed to receive chat.
+            // This keeps chat working even when the user hasn't passed an OAuth token.
+            channels: [this.channel],
+            options: { debug: false },
+            connection: { secure: true, reconnect: true },
+        });
 
-  connect() {
-    this.isDisconnecting = false;
-    this.clearTimers();
+        // ── Chat messages (PRIVMSG) ──────────────────────────────────────────
+        this.client.on('message', (_channel, userstate, message, self) => {
+            if (self) return;
 
-    if (this.onStatusChange) this.onStatusChange('connecting');
+            const author = userstate['display-name'] || userstate.username || 'Unknown';
+            const isBits = !!userstate.bits;
 
-    try {
-      // Use standard wss URL
-      this.socket = new WebSocket('wss://irc-ws.chat.twitch.tv:443');
+            const msg: ChatMessage = {
+                id: userstate.id || Math.random().toString(36).slice(2, 11),
+                author,
+                text: message.trim(),
+                platform: 'twitch',
+                eventType: isBits ? 'donation' : 'chat',
+                timestamp: new Date(),
+                isRead: false,
+                isFeatured: false,
+                isFirstMessage: userstate['first-msg'] === true,
+                avatarUrl: `https://api.dicebear.com/7.x/identicon/svg?seed=${author}`,
+                authorColor: userstate.color || '#9146FF',
+                donationAmount: isBits ? `${userstate.bits} Bits` : undefined,
+            };
+            this.onMessage(msg);
+        });
 
-      this.socket.onopen = () => {
-        this.reconnectAttempts = 0; // Reset on success
+        // ── Bits (cheer) — explicit event for clarity ────────────────────────
+        this.client.on('cheer', (_channel, userstate, message) => {
+            const author = userstate['display-name'] || userstate.username || 'Unknown';
+            const msg: ChatMessage = {
+                id: userstate.id || Math.random().toString(36).slice(2, 11),
+                author,
+                text: message.trim(),
+                platform: 'twitch',
+                eventType: 'donation',
+                timestamp: new Date(),
+                isRead: false,
+                isFeatured: false,
+                avatarUrl: `https://api.dicebear.com/7.x/identicon/svg?seed=${author}`,
+                authorColor: userstate.color || '#9146FF',
+                donationAmount: `${userstate.bits} Bits`,
+            };
+            this.onMessage(msg);
+        });
 
-        // Hardened handshake order: PASS -> NICK -> CAP REQ -> JOIN
-        this.socket?.send('PASS SCHRODINGER');
-        this.socket?.send('NICK justinfan' + Math.floor(Math.random() * 10000));
-        this.socket?.send('CAP REQ :twitch.tv/tags twitch.tv/commands');
-        this.socket?.send(`JOIN #${this.channel}`);
+        // ── New subscription ─────────────────────────────────────────────────
+        this.client.on('subscription', (_channel, username, method, messageText, userstate) => {
+            const author = userstate?.['display-name'] || username;
+            const msg: ChatMessage = {
+                id: userstate?.id || Math.random().toString(36).slice(2, 11),
+                author,
+                text: messageText?.trim() || `${author} just subscribed!`,
+                platform: 'twitch',
+                eventType: 'subscription',
+                timestamp: new Date(),
+                isRead: false,
+                isFeatured: false,
+                avatarUrl: `https://api.dicebear.com/7.x/identicon/svg?seed=${author}`,
+                authorColor: userstate?.color || '#9146FF',
+                subscription: {
+                    plan: method?.plan ?? 'Prime',
+                    months: 1,
+                    isGift: false,
+                    gifter: null,
+                },
+            };
+            this.onMessage(msg);
+        });
 
-        if (this.onStatusChange) this.onStatusChange('online');
+        // ── Resub ────────────────────────────────────────────────────────────
+        this.client.on('resub', (_channel, username, months, messageText, userstate) => {
+            const author = userstate?.['display-name'] || username;
+            const msg: ChatMessage = {
+                id: userstate?.id || Math.random().toString(36).slice(2, 11),
+                author,
+                text: messageText?.trim() || `${author} resubscribed for ${months} months!`,
+                platform: 'twitch',
+                eventType: 'subscription',
+                timestamp: new Date(),
+                isRead: false,
+                isFeatured: false,
+                avatarUrl: `https://api.dicebear.com/7.x/identicon/svg?seed=${author}`,
+                authorColor: userstate?.color || '#9146FF',
+                subscription: {
+                    plan: userstate?.['msg-param-sub-plan'] ?? '1000',
+                    months,
+                    isGift: false,
+                    gifter: null,
+                },
+            };
+            this.onMessage(msg);
+        });
 
-        if (this.accessToken && this.clientId) {
-          this.pollStats();
-          if (this.onHypeTrainUpdate) this.pollHypeTrain();
-        }
-      };
+        // ── Gift sub ─────────────────────────────────────────────────────────
+        this.client.on('subgift', (_channel, gifter, _streakMonths, recipient, methods, userstate) => {
+            const author = gifter;
+            const msg: ChatMessage = {
+                id: userstate?.id || Math.random().toString(36).slice(2, 11),
+                author,
+                text: `${gifter} gifted a sub to ${recipient}!`,
+                platform: 'twitch',
+                eventType: 'subscription',
+                timestamp: new Date(),
+                isRead: false,
+                isFeatured: false,
+                avatarUrl: `https://api.dicebear.com/7.x/identicon/svg?seed=${author}`,
+                authorColor: '#9146FF',
+                subscription: {
+                    plan: methods?.plan ?? '1000',
+                    months: 1,
+                    isGift: true,
+                    gifter,
+                },
+            };
+            this.onMessage(msg);
+        });
 
-      this.socket.onmessage = (event) => {
-        const data = event.data as string;
-        if (data.startsWith('PING')) {
-          this.socket?.send('PONG :tmi.twitch.tv');
-          return;
-        }
-        if (data.includes('PRIVMSG') || data.includes('USERNOTICE')) {
-          const msg = this.parseTwitchMessage(data);
-          if (msg) this.onMessage(msg);
-        }
-      };
+        // ── Connection lifecycle ─────────────────────────────────────────────
+        this.client.on('connected', () => {
+            this.onStatusChange?.('online');
+            if (this.accessToken && this.clientId) {
+                this.pollStats();
+                if (this.onHypeTrainUpdate) this.pollHypeTrain();
+            }
+        });
 
-      this.socket.onerror = (err) => {
-        // Minimal error logging for user
-        if (this.onStatusChange) this.onStatusChange('error', 'Connection failed. Retrying...');
-        this.handleReconnect();
-      };
+        this.client.on('disconnected', (reason) => {
+            if (!this.isDisconnecting) {
+                // tmi.js handles reconnection automatically (reconnect: true)
+                this.onStatusChange?.('error', reason || 'Disconnected. Reconnecting...');
+            }
+        });
 
-      this.socket.onclose = () => {
+        this.client.connect().catch((err: Error) => {
+            this.onStatusChange?.('error', err.message);
+        });
+    }
+
+    disconnect() {
+        this.isDisconnecting = true;
+        this.clearTimers();
+        this.client?.disconnect().catch(() => { /* silent — already disconnecting */ });
+        this.client = null;
+    }
+
+    private clearTimers() {
+        if (this.statsTimer) clearTimeout(this.statsTimer);
+        if (this.hypeTrainTimer) clearTimeout(this.hypeTrainTimer);
+    }
+
+    // ── Helix API polling ─────────────────────────────────────────────────────
+    // These are independent of the IRC connection and remain as-is.
+
+    private async pollStats() {
+        if (!this.accessToken || !this.clientId) return;
+
+        const token = this.accessToken.trim().replace(/^oauth:/i, '');
+        const clientId = this.clientId.trim();
+
+        try {
+            const resp = await fetch(
+                `https://api.twitch.tv/helix/streams?user_login=${this.channel}&t=${Date.now()}`,
+                {
+                    cache: 'no-store',
+                    headers: { 'Client-ID': clientId, 'Authorization': `Bearer ${token}` },
+                }
+            );
+            if (resp.ok) {
+                const data = await resp.json();
+                const streamData = data.data?.[0];
+                const isLive = !!streamData;
+                const viewers = streamData?.viewer_count ?? 0;
+                this.onStatsUpdate?.({ viewers, isLive });
+            }
+        } catch { /* network error — will retry */ }
+
         if (!this.isDisconnecting) {
-          this.handleReconnect();
+            this.statsTimer = setTimeout(() => this.pollStats(), 10_000);
         }
-      };
-
-    } catch (e: any) {
-      if (this.onStatusChange) this.onStatusChange('error', e.message);
-      this.handleReconnect();
-    }
-  }
-
-  private handleReconnect() {
-    if (this.isDisconnecting || this.reconnectAttempts >= this.maxReconnectAttempts) {
-      if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-        if (this.onStatusChange) this.onStatusChange('error', 'Cound not connect after multiple attempts.');
-      }
-      return;
     }
 
-    this.reconnectAttempts++;
-    // Exponential backoff: 1s, 2s, 4s, 8s, up to 30s
-    const delay = Math.min(30000, Math.pow(2, this.reconnectAttempts) * 1000);
+    private async pollHypeTrain() {
+        if (!this.accessToken || !this.clientId || !this.onHypeTrainUpdate) return;
 
-    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-    this.reconnectTimer = setTimeout(() => {
-      this.connect();
-    }, delay);
-  }
+        const token = this.accessToken.trim().replace(/^oauth:/i, '');
+        const clientId = this.clientId.trim();
 
-  private clearTimers() {
-    if (this.statsTimer) clearTimeout(this.statsTimer);
-    if (this.hypeTrainTimer) clearTimeout(this.hypeTrainTimer);
-    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-  }
+        try {
+            // Resolve broadcaster ID
+            const userResp = await fetch(`https://api.twitch.tv/helix/users?login=${this.channel}`, {
+                headers: { 'Client-ID': clientId, 'Authorization': `Bearer ${token}` },
+            });
+            const broadcasterId: string = userResp.ok
+                ? (await userResp.json()).data?.[0]?.id ?? ''
+                : '';
 
-  private async pollStats() {
-    if (!this.accessToken || !this.clientId) return;
+            if (!broadcasterId) {
+                this.logDebug?.('HypeTrain', 'Could not resolve broadcaster ID.');
+                this.hypeTrainTimer = setTimeout(() => this.pollHypeTrain(), 60_000);
+                return;
+            }
 
-    // Sanitize credentials: trim spaces and remove 'oauth:' prefix for Helix
-    const trimmedToken = this.accessToken.trim();
-    const trimmedClientId = this.clientId.trim();
-    const sanitizedToken = trimmedToken.replace(/^oauth:/i, '');
+            const resp = await fetch(
+                `https://api.twitch.tv/helix/hypetrain/status?broadcaster_id=${broadcasterId}`,
+                {
+                    cache: 'no-store',
+                    headers: { 'Client-ID': clientId, 'Authorization': `Bearer ${token}` },
+                }
+            );
 
-    try {
-      const resp = await fetch(`https://api.twitch.tv/helix/streams?user_login=${this.channel}&t=${Date.now()}`, {
-        cache: 'no-store',
-        headers: {
-          'Client-ID': trimmedClientId,
-          'Authorization': `Bearer ${sanitizedToken}`
+            if (!resp.ok) {
+                this.logDebug?.('HypeTrain', `API Error: ${resp.status} ${resp.statusText}`);
+                if (resp.status === 401 || resp.status === 403) {
+                    this.onStatusChange?.('error', "Hype Train: Missing 'channel:read:hype_train' scope.");
+                    this.hypeTrainTimer = setTimeout(() => this.pollHypeTrain(), 120_000);
+                    return;
+                }
+                this.hypeTrainTimer = setTimeout(() => this.pollHypeTrain(), 30_000);
+                return;
+            }
+
+            const data = await resp.json();
+
+            if (!data.data || data.data.length === 0) {
+                this.logDebug?.('HypeTrain', 'No active Hype Train.');
+                this.onHypeTrainUpdate(null);
+                this.hypeTrainTimer = setTimeout(() => this.pollHypeTrain(), 60_000);
+                return;
+            }
+
+            const train = data.data[0];
+            const expiresAt = new Date(train.expires_at).getTime();
+
+            if (expiresAt > Date.now()) {
+                this.logDebug?.('HypeTrain', `Active: Level ${train.level}, ${Math.floor((train.progress / train.goal) * 100)}%`);
+                this.onHypeTrainUpdate({
+                    id: train.id,
+                    level: train.level,
+                    progress: train.progress,
+                    goal: train.goal,
+                    total: train.total,
+                    isActive: true,
+                    expiryDate: new Date(train.expires_at),
+                });
+                this.hypeTrainTimer = setTimeout(() => this.pollHypeTrain(), 10_000);
+            } else {
+                this.logDebug?.('HypeTrain', 'Train expired.');
+                this.onHypeTrainUpdate(null);
+                this.hypeTrainTimer = setTimeout(() => this.pollHypeTrain(), 60_000);
+            }
+        } catch (e: any) {
+            this.logDebug?.('HypeTrain', `Exception: ${e.message}`);
+            this.hypeTrainTimer = setTimeout(() => this.pollHypeTrain(), 30_000);
         }
-      });
-
-      if (!resp.ok) return;
-
-      const data = await resp.json();
-
-      if (data.data && data.data.length > 0) {
-        const viewers = data.data[0].viewer_count;
-        if (this.onStatsUpdate) this.onStatsUpdate({ viewers });
-      } else {
-        if (this.onStatsUpdate) this.onStatsUpdate({ viewers: 0 });
-      }
-
-      this.statsTimer = setTimeout(() => this.pollStats(), 10000);
-    } catch (e) {
-      this.statsTimer = setTimeout(() => this.pollStats(), 10000);
     }
-  }
-
-  private async pollHypeTrain() {
-    if (!this.accessToken || !this.clientId || !this.onHypeTrainUpdate) return;
-
-    const trimmedToken = this.accessToken.trim().replace(/^oauth:/i, '');
-    const trimmedClientId = this.clientId.trim();
-
-    try {
-      let broadcasterId = '';
-      const userResp = await fetch(`https://api.twitch.tv/helix/users?login=${this.channel}`, {
-        headers: { 'Client-ID': trimmedClientId, 'Authorization': `Bearer ${trimmedToken}` }
-      });
-      if (userResp.ok) {
-        const userData = await userResp.json();
-        if (userData.data && userData.data.length > 0) {
-          broadcasterId = userData.data[0].id;
-        }
-      }
-
-      if (!broadcasterId) {
-        if (this.logDebug) this.logDebug('HypeTrain', 'Could not resolve broadcaster ID from channel name.');
-        this.hypeTrainTimer = setTimeout(() => this.pollHypeTrain(), 60000);
-        return;
-      }
-
-      const resp = await fetch(`https://api.twitch.tv/helix/hypetrain/status?broadcaster_id=${broadcasterId}`, {
-        cache: 'no-store',
-        headers: {
-          'Client-ID': trimmedClientId,
-          'Authorization': `Bearer ${trimmedToken}`
-        }
-      });
-
-      if (!resp.ok) {
-        if (this.logDebug) this.logDebug('HypeTrain', `API Error: ${resp.status} ${resp.statusText}`);
-        if (resp.status === 401 || resp.status === 403) {
-          console.warn("Twitch Hype Train 401/403: Missing scope channel:read:hype_train?");
-          if (this.onStatusChange) this.onStatusChange('error', "Hype Train: Missing 'channel:read:hype_train' scope.");
-          // Don't retry immediately to avoid spamming if the token is bad
-          this.hypeTrainTimer = setTimeout(() => this.pollHypeTrain(), 120000);
-          return;
-        }
-        this.hypeTrainTimer = setTimeout(() => this.pollHypeTrain(), 30000);
-        return;
-      }
-
-      const data = await resp.json();
-
-      let nextPollDelay = 60000;
-
-      if (!data.data || data.data.length === 0) {
-        if (this.logDebug) this.logDebug('HypeTrain', 'Polled: No active Hype Train.');
-        this.onHypeTrainUpdate(null);
-      } else {
-        const train = data.data[0];
-        const expiresAt = new Date(train.expires_at).getTime();
-        const now = Date.now();
-
-        if (expiresAt > now) {
-          if (this.logDebug) this.logDebug('HypeTrain', `Active Train Found: Level ${train.level}, ${Math.floor((train.progress / train.goal) * 100)}%`);
-
-          this.onHypeTrainUpdate({
-            id: train.id,
-            level: train.level,
-            progress: train.progress,
-            goal: train.goal,
-            total: train.total,
-            isActive: true,
-            expiryDate: new Date(train.expires_at)
-          });
-          nextPollDelay = 10000; // Poll faster when active
-        } else {
-          if (this.logDebug) this.logDebug('HypeTrain', 'Train found but expired. Waiting...');
-          this.onHypeTrainUpdate(null);
-          // Keep default 60s delay for expired trains
-        }
-      }
-
-      this.hypeTrainTimer = setTimeout(() => this.pollHypeTrain(), nextPollDelay);
-    } catch (e: any) {
-      if (this.logDebug) this.logDebug('HypeTrain', `Exception during poll: ${e.message}`);
-      this.hypeTrainTimer = setTimeout(() => this.pollHypeTrain(), 30000);
-    }
-  }
-
-  disconnect() {
-    this.isDisconnecting = true;
-    this.clearTimers();
-    if (this.socket) {
-      // Only close if it's OPEN. Closing in CONNECTING state can trigger browser warnings.
-      if (this.socket.readyState === WebSocket.OPEN) {
-        this.socket.close();
-      }
-      this.socket = null;
-    }
-  }
-
-  private parseTwitchMessage(raw: string): ChatMessage | null {
-    try {
-      // Basic tag parsing
-      const parts = raw.split(' ');
-      const tagsStr = parts[0].startsWith('@') ? parts[0].slice(1) : '';
-      const tags: Record<string, string> = {};
-      tagsStr.split(';').forEach(t => {
-        const [k, v] = t.split('=');
-        tags[k] = v;
-      });
-
-      const userMatch = raw.match(/:(\w+)!/);
-      const author = tags['display-name'] || (userMatch ? userMatch[1] : 'Unknown');
-
-      let text = '';
-      const privMsgMatch = raw.match(/PRIVMSG #[^ ]+ :(.+)/);
-      if (privMsgMatch) {
-        text = privMsgMatch[1].trim();
-      }
-
-      // Handle USERNOTICE (Subs, Resubs, Gifts)
-      const isUserNotice = raw.includes('USERNOTICE');
-      let eventType: 'chat' | 'donation' | 'subscription' = 'chat';
-      let subscriptionData = undefined;
-
-      if (isUserNotice) {
-        const msgId = tags['msg-id']; // sub, resub, subgift, anonsubgift, submysterygift, giftpaidupgrade, rewardgift, raid, unraid, ritual, bitsbadgetier
-
-        // We only care about subs for now
-        if (['sub', 'resub', 'subgift', 'anonsubgift'].includes(msgId)) {
-          eventType = 'subscription';
-          const plan = tags['msg-param-sub-plan'];
-          const months = parseInt(tags['msg-param-cumulative-months'] || '0') || parseInt(tags['msg-param-months'] || '0') || 1;
-          const isGift = msgId.includes('gift');
-          const gifter = tags['login']; // or display-name?
-
-          subscriptionData = {
-            plan,
-            months,
-            isGift,
-            gifter: isGift ? tags['display-name'] || tags['login'] : null
-          };
-
-          // System message is usually in the `system-msg` tag, replacing spaces with \s
-          const systemMsg = tags['system-msg'] ? tags['system-msg'].replace(/\\s/g, ' ') : '';
-
-          // If there is a user message attached, it comes after the second colon usually, but USERNOTICE parsing is tricky.
-          // raw: @tags :tmi.twitch.tv USERNOTICE #channel :Optional Message
-          const userNoticeMatch = raw.match(/USERNOTICE #[^ ]+ :(.+)/);
-          if (userNoticeMatch) {
-            text = userNoticeMatch[1].trim();
-          } else {
-            // specific case: no user message, just system message
-            text = systemMsg;
-          }
-
-          // If still empty (shouldn't happen for sub notifications usually having system-msg), fallback
-          if (!text) text = `${author} subscribed!`;
-        } else {
-          // Ignore other usernotices for now (like raids) or treat as chat?
-          // Let's treat as chat or null.
-          // Ideally we want to show Raids too? Maybe later.
-          // For now, if it's not a sub, return null to avoid clutter.
-          return null;
-        }
-      }
-
-      if (!text && eventType === 'chat') return null;
-
-      // first-msg=1 indicates a first-time chat
-      const isFirstMessage = tags['first-msg'] === '1';
-
-      // Check for bits (Cheer)
-      const bits = tags['bits'];
-      let donationAmount = undefined;
-      if (bits) {
-        donationAmount = `${bits} Bits`;
-        eventType = 'donation';
-      }
-
-      return {
-        id: tags['id'] || Math.random().toString(36).substr(2, 9),
-        author,
-        text,
-        platform: 'twitch',
-        eventType,
-        subscription: subscriptionData,
-        timestamp: new Date(),
-        isRead: false,
-        isFeatured: false,
-        isFirstMessage,
-        avatarUrl: `https://api.dicebear.com/7.x/identicon/svg?seed=${author}`,
-        authorColor: tags['color'] || '#9146FF',
-        donationAmount
-      };
-    } catch (e) {
-      return null;
-    }
-  }
 }
