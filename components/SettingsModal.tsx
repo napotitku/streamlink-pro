@@ -1,6 +1,7 @@
 
 import React, { useState } from 'react';
 import { AppSettings } from '../types';
+import { startTwitchLogin } from '@/src/twitchAuth';
 import { X, Save, Key, Twitch, Info, ShieldCheck, Beaker, Clock, Radio, Settings, Zap, Star, LogIn, LogOut } from 'lucide-react';
 
 interface SettingsModalProps {
@@ -35,15 +36,9 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, currentQuota, o
   ];
 
   const handleTwitchLogin = () => {
-    const clientId = formData.twitchClientId || import.meta.env.VITE_TWITCH_CLIENT_ID;
-    if (!clientId) {
-      alert("Missing Twitch Client ID. Please configure it in .env first.");
-      return;
+    if (!startTwitchLogin(formData.twitchClientId)) {
+      alert("Missing Twitch Client ID. Set VITE_TWITCH_CLIENT_ID in .env first.");
     }
-    const redirectUri = window.location.origin;
-    const scopes = "chat:read chat:edit channel:read:hype_train channel:read:subscriptions";
-    const authUrl = `https://id.twitch.tv/oauth2/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=token&scope=${encodeURIComponent(scopes)}`;
-    window.location.href = authUrl;
   };
 
   return (
@@ -92,21 +87,17 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, currentQuota, o
                 <div className="pt-2">
                   <div className="flex items-center justify-between bg-slate-950/50 border border-slate-800 rounded-xl p-3">
                     <div className="flex items-center gap-3">
-                      <div className={`w-2 h-2 rounded-full ${formData.twitchAccessToken ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : import.meta.env.VITE_TWITCH_ACCESS_TOKEN ? 'bg-indigo-500' : 'bg-red-500'}`}></div>
+                      <div className={`w-2 h-2 rounded-full ${formData.twitchAccessToken ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-red-500'}`}></div>
                       <div className="flex flex-col">
                         <span className="text-white text-xs font-bold">
                           {formData.twitchAccessToken
                             ? `Connected as ${formData.twitchChannel || 'User'}`
-                            : import.meta.env.VITE_TWITCH_ACCESS_TOKEN
-                              ? 'Connected via Environment'
-                              : 'Not Connected'}
+                            : 'Not Connected'}
                         </span>
                         <span className="text-[10px] text-slate-500">
                           {formData.twitchAccessToken
-                            ? 'Using personal access token'
-                            : import.meta.env.VITE_TWITCH_ACCESS_TOKEN
-                              ? 'Using shared/env token'
-                              : 'Connect to start tracking chat'}
+                            ? 'Log in with the broadcaster account to get the Hype Train'
+                            : 'Log in with Twitch to read chat'}
                         </span>
                       </div>
                     </div>

@@ -10,7 +10,8 @@ interface ImportMetaEnv {
     readonly VITE_FIREBASE_APP_ID: string
     readonly VITE_FIREBASE_MEASUREMENT_ID: string
     readonly VITE_TWITCH_CLIENT_ID: string
-    readonly VITE_TWITCH_ACCESS_TOKEN: string
+    readonly VITE_TWITCH_CHANNEL?: string
+    readonly VITE_YOUTUBE_API_KEY?: string
 }
 
 interface ImportMeta {

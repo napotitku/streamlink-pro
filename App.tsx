@@ -11,6 +11,7 @@ import { useMessageStore } from '@/src/hooks/useMessageStore';
 import { useChatConnection } from '@/src/hooks/useChatConnection';
 import { useFirebaseAuth } from '@/src/hooks/useFirebaseAuth';
 import AuthHandler from './components/AuthHandler';
+import { startTwitchLogin } from '@/src/twitchAuth';
 
 const App: React.FC = () => {
   const location = useLocation();
@@ -258,15 +259,9 @@ const App: React.FC = () => {
   };
 
   const handleTwitchLogin = useCallback(() => {
-    const clientId = settings.twitchClientId || import.meta.env.VITE_TWITCH_CLIENT_ID;
-    if (!clientId) {
-      alert("Missing Twitch Client ID. Please configure it in .env first.");
-      return;
+    if (!startTwitchLogin(settings.twitchClientId)) {
+      alert("Missing Twitch Client ID. Set VITE_TWITCH_CLIENT_ID in .env first.");
     }
-    const redirectUri = window.location.origin;
-    const scopes = "chat:read chat:edit channel:read:hype_train channel:read:subscriptions";
-    const authUrl = `https://id.twitch.tv/oauth2/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=token&scope=${encodeURIComponent(scopes)}`;
-    window.location.href = authUrl;
   }, [settings.twitchClientId]);
 
   return (

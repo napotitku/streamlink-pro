@@ -35,6 +35,10 @@ export const useChatConnection = ({ settings, addMessage, updateStats, increment
         if (twitchClient.current) twitchClient.current.disconnect();
         if (youtubeClient.current) youtubeClient.current.disconnect();
 
+        // The overlay (OBS) only reads `currentComment` and `hypeTrain` from Firebase.
+        // It has no login and must not open chat connections of its own.
+        if (readOnly) return;
+
         // Reset stats
         updateStats('twitch', settings.twitchChannel
             ? { status: 'connecting', authExpired: false, tokenExpiresAt: undefined }
@@ -119,7 +123,8 @@ export const useChatConnection = ({ settings, addMessage, updateStats, increment
         updateStats,
         incrementQuota,
         settings.twitchAccessToken,
-        settings.twitchClientId
+        settings.twitchClientId,
+        readOnly
     ]);
 
     const simulateHypeTrain = (data: HypeTrainData | null) => {

@@ -1,5 +1,6 @@
 import React, { createContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import { AppSettings } from '@/types';
+import { loadTwitchToken, saveTwitchToken } from '@/src/twitchAuth';
 
 interface AppSettingsContextType {
     settings: AppSettings;
@@ -12,7 +13,7 @@ interface AppSettingsContextType {
 const DEFAULT_SETTINGS: AppSettings = {
     twitchChannel: '',
     twitchClientId: import.meta.env.VITE_TWITCH_CLIENT_ID || '',
-    twitchAccessToken: import.meta.env.VITE_TWITCH_ACCESS_TOKEN || '',
+    twitchAccessToken: '',
     youtubeVideoId: '',
     youtubeApiKey: import.meta.env.VITE_YOUTUBE_API_KEY || '',
     showAvatars: true,
@@ -35,18 +36,15 @@ export const AppSettingsProvider: React.FC<{ children: ReactNode }> = ({ childre
             const saved = localStorage.getItem('streamlink_settings');
             const parsed = saved ? JSON.parse(saved) : DEFAULT_SETTINGS;
 
-            // Enforce environment variables if they exist
             const envClientId = import.meta.env.VITE_TWITCH_CLIENT_ID;
-            const envAccessToken = import.meta.env.VITE_TWITCH_ACCESS_TOKEN;
             const envChannel = import.meta.env.VITE_TWITCH_CHANNEL;
 
             return {
                 ...DEFAULT_SETTINGS,
                 ...parsed,
                 twitchClientId: envClientId || parsed.twitchClientId || '',
-                // Prioritize user-provided token (from OAuth) -> Env Token -> Persisted Token (fallback)
-                twitchAccessToken: parsed.twitchAccessToken || envAccessToken || '',
-                // Prioritize user-provided channel (from OAuth) -> Env Channel -> Persisted Channel (fallback)
+                // The token only ever comes from the user's own Twitch login (see src/twitchAuth.ts).
+                twitchAccessToken: loadTwitchToken(),
                 twitchChannel: parsed.twitchChannel || envChannel || '',
                 youtubeVideoId: '' // Always reset video ID on load
             };
@@ -73,16 +71,18 @@ export const AppSettingsProvider: React.FC<{ children: ReactNode }> = ({ childre
     });
 
     useEffect(() => {
-        // Strip all sensitive credentials from localStorage — they are sourced from
-        // import.meta.env on every load, so omitting them here has no functional impact.
+        // Keep credentials out of localStorage. API keys come from import.meta.env on
+        // every load; the Twitch login token is stored per-tab in sessionStorage below.
         const {
             youtubeVideoId,       // always reset on load
-            twitchAccessToken,    // OAuth token — must never be persisted
+            twitchAccessToken,    // OAuth token — never in localStorage
             twitchClientId,       // API credential
             youtubeApiKey,        // API credential
             ...persistentSettings
         } = settings;
         localStorage.setItem('streamlink_settings', JSON.stringify(persistentSettings));
+        // The Twitch token goes to sessionStorage instead: it survives a reload, not closing the browser.
+        saveTwitchToken(twitchAccessToken);
     }, [settings]);
 
     useEffect(() => {
