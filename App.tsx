@@ -30,6 +30,7 @@ const App: React.FC = () => {
     markAsTrashed,
     toggleInteresting,
     updateStats,
+    applyModeration,
     broadcastFeatured
   } = useMessageStore(settings);
 
@@ -40,7 +41,8 @@ const App: React.FC = () => {
     incrementQuota,
     // Only mark auth ready for writes when the user is actually authorized (or it's the overlay)
     authReady: authReady && (isOverlay || isAuthorized),
-    readOnly: isOverlay
+    readOnly: isOverlay,
+    onModeration: applyModeration
   });
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);

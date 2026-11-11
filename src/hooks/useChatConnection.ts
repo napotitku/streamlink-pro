@@ -1,6 +1,6 @@
 import { useRef, useEffect, useState } from 'react';
 import { AppSettings, ChatMessage, StreamStats, HypeTrainData } from '@/types';
-import { TwitchChatClient } from '@/services/twitchService';
+import { TwitchChatClient, ModerationEvent } from '@/services/twitchService';
 import { YouTubeChatClient } from '@/services/youtubeService';
 import { syncService } from '@/services/syncService';
 
@@ -11,9 +11,11 @@ interface UseChatConnectionProps {
     incrementQuota: (units: number) => void;
     readOnly?: boolean;
     authReady?: boolean;
+    /** A Twitch moderator deleted a message or cleared a user's messages. */
+    onModeration?: (event: ModerationEvent) => void;
 }
 
-export const useChatConnection = ({ settings, addMessage, updateStats, incrementQuota, readOnly = false, authReady = false }: UseChatConnectionProps) => {
+export const useChatConnection = ({ settings, addMessage, updateStats, incrementQuota, readOnly = false, authReady = false, onModeration }: UseChatConnectionProps) => {
     const twitchClient = useRef<TwitchChatClient | null>(null);
     const youtubeClient = useRef<YouTubeChatClient | null>(null);
     const [hypeTrain, setHypeTrain] = useState<HypeTrainData | null>(null);
@@ -29,6 +31,8 @@ export const useChatConnection = ({ settings, addMessage, updateStats, increment
     // value (false), which meant the dashboard never wrote the Hype Train to Firebase.
     const live = useRef({ authReady, readOnly, showHypeTrain: settings.showHypeTrain, showSubscriptions: settings.showSubscriptions });
     live.current = { authReady, readOnly, showHypeTrain: settings.showHypeTrain, showSubscriptions: settings.showSubscriptions };
+    const onModerationRef = useRef(onModeration);
+    onModerationRef.current = onModeration;
 
     useEffect(() => {
         // Cleanup previous connections
@@ -41,55 +45,34 @@ export const useChatConnection = ({ settings, addMessage, updateStats, increment
 
         // Reset stats
         updateStats('twitch', settings.twitchChannel
-            ? { status: 'connecting', authExpired: false, tokenExpiresAt: undefined }
-            : { viewers: 0, status: 'offline', title: 'Not connected', isLive: false, authExpired: false, tokenExpiresAt: undefined });
+            ? { status: 'connecting', errorMessage: undefined, authIssue: undefined, tokenExpiresAt: undefined }
+            : { viewers: 0, status: 'offline', title: 'Not connected', isLive: false, errorMessage: undefined, authIssue: undefined, tokenExpiresAt: undefined });
         updateStats('youtube', (settings.youtubeApiKey && settings.youtubeVideoId) ? { status: 'connecting' } : { viewers: 0, status: 'offline', title: 'Not connected' });
 
-        // Twitch Connection
+        // Twitch Connection (EventSub — needs the user's own Twitch login)
         if (settings.twitchChannel) {
-            twitchClient.current = new TwitchChatClient(
-                settings.twitchChannel,
-                (msg) => {
-                    // Check settings for subscriptions
-                    if (msg.eventType === 'subscription' && !live.current.showSubscriptions) {
-                        return;
-                    }
+            twitchClient.current = new TwitchChatClient({
+                channel: settings.twitchChannel,
+                accessToken: settings.twitchAccessToken,
+                clientId: settings.twitchClientId,
+                onMessage: (msg) => {
+                    if (msg.eventType === 'subscription' && !live.current.showSubscriptions) return;
                     addMessage(msg);
                 },
-                (stats) => updateStats('twitch', stats),
-                (hypeTrainData) => {
-                    // Check if Hype Train is enabled
+                onStatsUpdate: (stats) => updateStats('twitch', stats),
+                onHypeTrainUpdate: (hypeTrainData) => {
                     if (!live.current.showHypeTrain) return;
-
-                    // Check if we are currently running a simulation
-                    if (hypeTrainRef.current?.isTest && hypeTrainRef.current?.isActive) {
-                        // If simulation is active, only allow OVERWRITE if the new data is ALSO active (real train started)
-                        // If new data is null (no train), ignore it to prevent clearing the simulation
-                        if (!hypeTrainData) return;
-                    }
-
-                    // Write to Firebase — only when authenticated AND not in read-only mode
-                    const { readOnly: isReadOnly, authReady: canWrite } = live.current;
-                    if (!isReadOnly && canWrite) {
-                        syncService.setHypeTrain(hypeTrainData);
-                    } else if (isReadOnly) {
-                        setHypeTrain(hypeTrainData);
-                    }
+                    // While a simulation runs, only a real active train may replace it.
+                    if (hypeTrainRef.current?.isTest && hypeTrainRef.current?.isActive && !hypeTrainData) return;
+                    if (live.current.authReady) syncService.setHypeTrain(hypeTrainData);
                 },
-                settings.twitchAccessToken,
-                settings.twitchClientId,
-                (status, error) => {
-                    updateStats('twitch', {
-                        status: status as any,
-                        errorMessage: error
-                    });
-                },
-                (category, message) => {
-                    // The overlay has no signed-in user, so the database rules reject its writes.
-                    if (!live.current.authReady || live.current.readOnly) return;
+                onStatusChange: (status, error) => updateStats('twitch', { status, errorMessage: error }),
+                onModeration: (event) => onModerationRef.current?.(event),
+                logDebug: (category, message) => {
+                    if (!live.current.authReady) return;
                     syncService.logHypeTrainEvent(category, message, false);
-                }
-            );
+                },
+            });
             twitchClient.current.connect();
         }
 

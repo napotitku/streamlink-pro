@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import { AppState, ChatMessage, StreamStats, Platform } from '@/types';
 import { syncService } from '@/services/syncService';
+import type { ModerationEvent } from '@/services/twitchService';
 
 const syncChannel = new BroadcastChannel('streamlink_sync');
 
@@ -121,6 +122,20 @@ export const useMessageStore = (settings: { autoDismissEnabled: boolean; autoDis
         });
     }, [broadcastFeatured]);
 
+    /** A Twitch mod deleted a message or banned/timed out a user: trash it, and take it off air. */
+    const applyModeration = useCallback((event: ModerationEvent) => {
+        const hit = (m: ChatMessage) => event.type === 'delete' ? m.id === event.messageId : (!!m.authorId && m.authorId === event.userId);
+        setState(prev => {
+            const featuredHit = !!prev.featuredMessage && hit(prev.featuredMessage);
+            if (featuredHit) broadcastFeatured(null);
+            return {
+                ...prev,
+                featuredMessage: featuredHit ? null : prev.featuredMessage,
+                messages: prev.messages.map(m => hit(m) ? { ...m, isRead: true, isTrashed: true, isFeatured: false, featuredAt: undefined } : m)
+            };
+        });
+    }, [broadcastFeatured]);
+
     const toggleInteresting = useCallback((id: string) => {
         setState(prev => ({
             ...prev,
@@ -181,6 +196,7 @@ export const useMessageStore = (settings: { autoDismissEnabled: boolean; autoDis
         markAsTrashed,
         toggleInteresting,
         updateStats,
+        applyModeration,
         broadcastFeatured // Exported for auto-dismiss logic
     };
 };

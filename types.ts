@@ -4,6 +4,8 @@ export type Platform = 'twitch' | 'youtube';
 export interface ChatMessage {
   id: string;
   author: string;
+  /** Platform user ID of the author (Twitch), used to remove a banned user's messages. */
+  authorId?: string;
   text: string;
   platform: Platform;
   timestamp: Date;
@@ -20,6 +22,8 @@ export interface ChatMessage {
   pinnedAt?: number; // Absolute timestamp when the message was pinned (usually donation time)
   eventType?: EventType;
   subscription?: SubscriptionData;
+  /** Viewer count for `eventType: 'raid'`. */
+  raidViewers?: number;
 }
 
 export interface StreamStats {
@@ -29,8 +33,8 @@ export interface StreamStats {
   errorMessage?: string;
   /** True when the Helix streams endpoint confirms an active broadcast. Distinct from `status === 'online'` which only means the IRC/API connection is up. */
   isLive?: boolean;
-  /** True when Twitch rejected the stored token. Chat may still work; viewer count and Hype Train don't. */
-  authExpired?: boolean;
+  /** Set when the Twitch login needs renewing: 'expired' (rejected/expired) or 'scopes' (old login without chat access). */
+  authIssue?: 'expired' | 'scopes';
   /** Epoch ms when the current token expires, from Twitch's /validate endpoint. */
   tokenExpiresAt?: number;
 }
@@ -57,7 +61,7 @@ export interface AppState {
   quotaUsage: number;
 }
 
-export type EventType = 'chat' | 'donation' | 'subscription' | 'follow';
+export type EventType = 'chat' | 'donation' | 'subscription' | 'follow' | 'raid';
 
 export interface SubscriptionData {
   plan?: string;
