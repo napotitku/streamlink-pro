@@ -1,137 +1,132 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { AppState, ChatMessage, StreamStats, Platform } from '@/types';
-import { syncService } from '@/services/syncService';
+import { syncService, FeaturedMessagePayload } from '@/services/syncService';
 import type { ModerationEvent } from '@/services/twitchService';
 
+const MAX_MESSAGES = 200;
 const syncChannel = new BroadcastChannel('streamlink_sync');
 
-export const useMessageStore = (settings: { autoDismissEnabled: boolean; autoDismissSeconds: number }) => {
-    const [state, setState] = useState<AppState>({
+type StoreState = Omit<AppState, 'settings' | 'quotaUsage'>;
+
+const unfeature = (m: ChatMessage): ChatMessage => (m.isFeatured || m.featuredAt ? { ...m, isFeatured: false, featuredAt: undefined } : m);
+
+/**
+ * Messages, the on-air ("featured") message and the "Up next" queue.
+ *
+ * Firebase writes happen in the action functions, never inside setState updaters
+ * (React may run updaters twice, which used to double every write).
+ */
+export const useMessageStore = (
+    settings: { autoDismissEnabled: boolean; autoDismissSeconds: number },
+    options: { restoreFeatured?: boolean } = {}
+) => {
+    const [state, setState] = useState<StoreState>({
         messages: [],
         featuredMessage: null,
+        queue: [],
         stats: {
             twitch: { viewers: 0, status: 'offline', title: 'Not connected' },
             youtube: { viewers: 0, status: 'offline', title: 'Not connected' },
         },
-        // Settings and quota are managed by useAppSettings but passed partly into state for potential unified access if needed.
-        // However, in this refactor, we might want to keep them separate. 
-        // For now, to minimize disruption, we will initialize them empty or update them via props if needed,
-        // but the original AppState included them. We will need to sync them or modify AppState type usage.
-        // Since AppState is used in DashboardProps, let's keep it syncable or create a derived state in App.tsx
-        settings: { ...settings, twitchChannel: '', youtubeVideoId: '', youtubeApiKey: '', showAvatars: true, fontSize: 14 } as any,
-        quotaUsage: 0
     });
+    // Synchronous view of the latest state for the action functions.
+    const stateRef = useRef(state);
+    stateRef.current = state;
 
     const broadcastFeatured = useCallback((msg: ChatMessage | null) => {
-        const featuredAt = msg ? Date.now() : null;
-        const payload = {
-            type: msg ? 'SET_FEATURED' as const : 'CLEAR_FEATURED' as const,
+        const featuredAt = msg ? (msg.featuredAt ?? Date.now()) : null;
+        const payload: FeaturedMessagePayload = {
+            type: msg ? 'SET_FEATURED' : 'CLEAR_FEATURED',
             payload: msg ? { ...msg, featuredAt: featuredAt as number } : null,
             timestamp: Date.now(),
             autoDismissEnabled: settings.autoDismissEnabled,
             autoDismissSeconds: settings.autoDismissSeconds,
             featuredAt,
         };
-
-        syncService.setFeaturedMessage(payload);
-
+        syncService.setFeaturedMessage(payload).catch(err => console.warn('[sync] featured write failed', err));
         syncChannel.postMessage(payload);
-        localStorage.setItem('streamlink_sync_event', JSON.stringify(payload));
     }, [settings.autoDismissEnabled, settings.autoDismissSeconds]);
 
     const addMessage = useCallback((msg: ChatMessage) => {
         setState(prev => {
             if (prev.messages.some(m => m.id === msg.id)) return prev;
-
-            // Donation Logic: If message has donationAmount, ensure pinnedDuration is set if not already
-            // This logic can be expanded for real defaults based on amount
-            let finalMsg = { ...msg };
+            const finalMsg = { ...msg };
+            // Donations stay pinned in the side panel for 60 s unless the source says otherwise.
             if (finalMsg.donationAmount && !finalMsg.pinnedDuration) {
-                // Default durations based on amount could go here.
-                // For now, let's say any donation gets 60s if not specified.
                 finalMsg.pinnedDuration = 60;
                 finalMsg.pinnedAt = Date.now();
             }
-
-            return {
-                ...prev,
-                messages: [finalMsg, ...prev.messages].slice(0, 200)
-            };
+            const messages = [finalMsg, ...prev.messages].slice(0, MAX_MESSAGES);
+            const kept = new Set(messages.map(m => m.id));
+            return { ...prev, messages, queue: prev.queue.filter(id => kept.has(id)) };
         });
     }, []);
 
-    const markAsRead = useCallback((id: string) => {
+    /** Puts a message on air. Whatever was on air before counts as read. */
+    const featureMessage = useCallback((id: string) => {
+        const msg = stateRef.current.messages.find(m => m.id === id);
+        if (!msg) {
+            setState(prev => ({ ...prev, queue: prev.queue.filter(q => q !== id) }));
+            return;
+        }
+        const featuredAt = Date.now();
+        const onAir: ChatMessage = { ...msg, isFeatured: true, isRead: false, isTrashed: false, featuredAt };
+        broadcastFeatured(onAir);
+
         setState(prev => {
-            const isCurrentlyFeatured = prev.featuredMessage?.id === id;
-            if (isCurrentlyFeatured) {
-                broadcastFeatured(null);
-            }
+            const prevId = prev.featuredMessage?.id;
             return {
                 ...prev,
-                featuredMessage: isCurrentlyFeatured ? null : prev.featuredMessage,
-                messages: prev.messages.map(m => m.id === id ? { ...m, isRead: true, isFeatured: false, isTrashed: false, featuredAt: undefined } : m)
+                featuredMessage: onAir,
+                queue: prev.queue.filter(q => q !== id),
+                messages: prev.messages.map(m => {
+                    if (m.id === id) return onAir;
+                    if (m.id === prevId) return { ...unfeature(m), isRead: true };
+                    return unfeature(m);
+                }),
             };
         });
     }, [broadcastFeatured]);
 
-    const clearFeatured = useCallback(() => {
-        broadcastFeatured(null);
+    /** Takes a message off air (if it is on air) and marks it read. */
+    const markAsRead = useCallback((id: string) => {
+        if (stateRef.current.featuredMessage?.id === id) broadcastFeatured(null);
         setState(prev => ({
             ...prev,
-            featuredMessage: null,
-            messages: prev.messages.map(m => ({ ...m, isFeatured: false, featuredAt: undefined }))
+            featuredMessage: prev.featuredMessage?.id === id ? null : prev.featuredMessage,
+            messages: prev.messages.map(m => m.id === id ? { ...unfeature(m), isRead: true, isTrashed: false } : m),
         }));
     }, [broadcastFeatured]);
 
-    const featureMessage = useCallback((id: string) => {
-        setState(prev => {
-            const msg = prev.messages.find(m => m.id === id) || null;
-            const prevFeaturedId = prev.featuredMessage?.id;
-            const featuredAt = Date.now();
-
-            const updatedMsg = msg ? { ...msg, isFeatured: true, featuredAt } : null;
-            broadcastFeatured(updatedMsg);
-
-            return {
-                ...prev,
-                featuredMessage: updatedMsg,
-                messages: prev.messages.map(m => {
-                    if (m.id === id) {
-                        return { ...m, isFeatured: true, isRead: false, isTrashed: false, featuredAt };
-                    }
-                    if (prevFeaturedId && m.id === prevFeaturedId && m.id !== id) {
-                        return { ...m, isFeatured: false, isRead: true, isTrashed: false, featuredAt: undefined };
-                    }
-                    return { ...m, isFeatured: false, featuredAt: undefined };
-                })
-            };
-        });
-    }, [broadcastFeatured]);
+    const clearFeatured = useCallback(() => {
+        const current = stateRef.current.featuredMessage;
+        if (current) markAsRead(current.id);
+        else broadcastFeatured(null);
+    }, [markAsRead, broadcastFeatured]);
 
     const markAsTrashed = useCallback((id: string) => {
-        setState(prev => {
-            const isCurrentlyFeatured = prev.featuredMessage?.id === id;
-            if (isCurrentlyFeatured) {
-                broadcastFeatured(null);
-            }
-            return {
-                ...prev,
-                featuredMessage: isCurrentlyFeatured ? null : prev.featuredMessage,
-                messages: prev.messages.map(m => m.id === id ? { ...m, isRead: true, isTrashed: true, isFeatured: false, featuredAt: undefined } : m)
-            };
-        });
+        if (stateRef.current.featuredMessage?.id === id) broadcastFeatured(null);
+        setState(prev => ({
+            ...prev,
+            featuredMessage: prev.featuredMessage?.id === id ? null : prev.featuredMessage,
+            queue: prev.queue.filter(q => q !== id),
+            messages: prev.messages.map(m => m.id === id ? { ...unfeature(m), isRead: true, isTrashed: true } : m),
+        }));
     }, [broadcastFeatured]);
 
     /** A Twitch mod deleted a message or banned/timed out a user: trash it, and take it off air. */
     const applyModeration = useCallback((event: ModerationEvent) => {
         const hit = (m: ChatMessage) => event.type === 'delete' ? m.id === event.messageId : (!!m.authorId && m.authorId === event.userId);
+        const featured = stateRef.current.featuredMessage;
+        const featuredHit = !!featured && hit(featured);
+        if (featuredHit) broadcastFeatured(null);
         setState(prev => {
-            const featuredHit = !!prev.featuredMessage && hit(prev.featuredMessage);
-            if (featuredHit) broadcastFeatured(null);
+            const removed = new Set(prev.messages.filter(hit).map(m => m.id));
             return {
                 ...prev,
-                featuredMessage: featuredHit ? null : prev.featuredMessage,
-                messages: prev.messages.map(m => hit(m) ? { ...m, isRead: true, isTrashed: true, isFeatured: false, featuredAt: undefined } : m)
+                featuredMessage: prev.featuredMessage && hit(prev.featuredMessage) ? null : prev.featuredMessage,
+                queue: prev.queue.filter(id => !removed.has(id)),
+                messages: prev.messages.map(m => removed.has(m.id) ? { ...unfeature(m), isRead: true, isTrashed: true } : m),
             };
         });
     }, [broadcastFeatured]);
@@ -139,64 +134,88 @@ export const useMessageStore = (settings: { autoDismissEnabled: boolean; autoDis
     const toggleInteresting = useCallback((id: string) => {
         setState(prev => ({
             ...prev,
-            messages: prev.messages.map(m =>
-                m.id === id ? { ...m, isInteresting: !m.isInteresting } : m
-            )
+            messages: prev.messages.map(m => m.id === id ? { ...m, isInteresting: !m.isInteresting } : m),
         }));
+    }, []);
+
+    /** Adds a message to the "Up next" queue, or removes it if already queued. */
+    const toggleQueued = useCallback((id: string) => {
+        setState(prev => {
+            if (prev.featuredMessage?.id === id) return prev;
+            const queued = prev.queue.includes(id);
+            return {
+                ...prev,
+                queue: queued ? prev.queue.filter(q => q !== id) : [...prev.queue, id],
+                messages: queued ? prev.messages : prev.messages.map(m => m.id === id ? { ...m, isRead: false, isTrashed: false } : m),
+            };
+        });
     }, []);
 
     const updateStats = useCallback((platform: Platform, newStats: Partial<StreamStats>) => {
         setState(prev => ({
             ...prev,
-            stats: {
-                ...prev.stats,
-                [platform]: { ...prev.stats[platform], ...newStats }
-            }
+            stats: { ...prev.stats, [platform]: { ...prev.stats[platform], ...newStats } },
         }));
     }, []);
 
+    // Another dashboard tab featured or cleared a message.
     useEffect(() => {
-        const handleSync = (event: MessageEvent) => {
-            if (event.data.type === 'SET_FEATURED') {
+        const handleSync = (event: MessageEvent<FeaturedMessagePayload>) => {
+            const data = event.data;
+            if (data.type === 'SET_FEATURED' && data.payload) {
+                const incoming = { ...data.payload, timestamp: new Date(data.payload.timestamp) } as ChatMessage;
                 setState(prev => ({
                     ...prev,
-                    featuredMessage: event.data.payload,
-                    messages: prev.messages.map(m => ({
-                        ...m,
-                        isFeatured: m.id === event.data.payload?.id,
-                        featuredAt: m.id === event.data.payload?.id ? event.data.payload?.featuredAt : m.featuredAt
-                    }))
+                    featuredMessage: incoming,
+                    queue: prev.queue.filter(q => q !== incoming.id),
+                    messages: prev.messages.map(m => m.id === incoming.id ? { ...m, isFeatured: true, featuredAt: incoming.featuredAt } : unfeature(m)),
                 }));
-            } else if (event.data.type === 'CLEAR_FEATURED') {
+            } else if (data.type === 'CLEAR_FEATURED') {
                 setState(prev => ({
                     ...prev,
                     featuredMessage: null,
-                    messages: prev.messages.map(m => {
-                        // When clearing featured, mark the one that WAS featured as read
-                        if (prev.featuredMessage?.id === m.id) {
-                            return { ...m, isFeatured: false, isRead: true, featuredAt: undefined };
-                        }
-                        return { ...m, isFeatured: false, featuredAt: undefined };
-                    })
+                    messages: prev.messages.map(m => prev.featuredMessage?.id === m.id ? { ...unfeature(m), isRead: true } : unfeature(m)),
                 }));
             }
         };
-
         syncChannel.addEventListener('message', handleSync);
         return () => syncChannel.removeEventListener('message', handleSync);
     }, []);
 
+    // After a dashboard reload, pick up whatever is still on the overlay instead of wiping it.
+    useEffect(() => {
+        if (!options.restoreFeatured) return;
+        let cancelled = false;
+        syncService.getFeaturedMessage().then(data => {
+            if (cancelled || !data || data.type !== 'SET_FEATURED' || !data.payload) return;
+            const featuredAt = data.featuredAt ?? data.payload.featuredAt;
+            const expired = data.autoDismissEnabled && featuredAt && Date.now() > featuredAt + data.autoDismissSeconds * 1000;
+            if (expired) {
+                // The dashboard that featured it closed before the timer fired: clean up now.
+                syncService.setFeaturedMessage(null).catch(() => {});
+                return;
+            }
+            const restored = { ...data.payload, timestamp: new Date(data.payload.timestamp), isFeatured: true } as ChatMessage;
+            setState(prev => prev.featuredMessage ? prev : ({
+                ...prev,
+                featuredMessage: restored,
+                messages: prev.messages.some(m => m.id === restored.id) ? prev.messages : [restored, ...prev.messages],
+            }));
+        }).catch(() => { /* not signed in yet or offline — nothing to restore */ });
+        return () => { cancelled = true; };
+    }, [options.restoreFeatured]);
+
     return {
         state,
-        setState,
         addMessage,
         markAsRead,
         clearFeatured,
         featureMessage,
         markAsTrashed,
         toggleInteresting,
+        toggleQueued,
         updateStats,
         applyModeration,
-        broadcastFeatured // Exported for auto-dismiss logic
+        broadcastFeatured,
     };
 };

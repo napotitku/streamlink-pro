@@ -106,7 +106,7 @@ export const PinnedMessagesWidget: React.FC<PinnedMessagesWidgetProps> = ({ mess
     return (
         <div className="space-y-3 animate-in slide-in-from-right duration-500">
             <h2 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 flex items-center gap-2">
-                <Coins size={12} className="text-emerald-500" /> Active Donations
+                <Coins size={12} className="text-amber-400" /> Pinned support
             </h2>
             <div className="flex flex-col gap-2 max-h-[300px] overflow-y-auto custom-scrollbar pr-1">
                 {activeDonations.map(msg => (

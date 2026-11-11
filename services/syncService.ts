@@ -54,6 +54,12 @@ export const syncService = {
         });
     },
 
+    /** One-off read of `currentComment`, used to restore the on-air message after a dashboard reload. */
+    async getFeaturedMessage(): Promise<FeaturedMessagePayload | null> {
+        const snapshot = await get(ref(db, 'currentComment'));
+        return snapshot.val() as FeaturedMessagePayload | null;
+    },
+
     /**
      * Writes a featured-message payload to `currentComment`.
      * Pass `null` to clear.

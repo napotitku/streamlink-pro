@@ -12,6 +12,7 @@ import { useChatConnection } from '@/src/hooks/useChatConnection';
 import { useFirebaseAuth } from '@/src/hooks/useFirebaseAuth';
 import AuthHandler from './components/AuthHandler';
 import { startTwitchLogin } from '@/src/twitchAuth';
+import { validateTwitchToken } from '@/services/twitchService';
 
 const App: React.FC = () => {
   const location = useLocation();
@@ -29,10 +30,10 @@ const App: React.FC = () => {
     featureMessage,
     markAsTrashed,
     toggleInteresting,
+    toggleQueued,
     updateStats,
-    applyModeration,
-    broadcastFeatured
-  } = useMessageStore(settings);
+    applyModeration
+  } = useMessageStore(settings, { restoreFeatured: !isOverlay });
 
   const { twitchClient, youtubeClient, hypeTrain, simulateHypeTrain } = useChatConnection({
     settings,
@@ -51,18 +52,6 @@ const App: React.FC = () => {
 
 
 
-  // Keyboard shortcuts
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        if (messageState.featuredMessage) {
-          markAsRead(messageState.featuredMessage.id);
-        }
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [messageState.featuredMessage, markAsRead]);
 
   // Keep a ref to settings to access fresh values inside timeouts
   const settingsRef = useRef(settings);
@@ -75,19 +64,17 @@ const App: React.FC = () => {
     }
 
     if (messageState.featuredMessage) {
-      // Determine duration: Use global setting for overlay dismissal (pinnedDuration is for Pinned Widget only)
-      const durationSeconds = settings.autoDismissSeconds;
-
-      // Only set timer if enabled OR if it's a donation (donations usually have fixed expiry, but let's respect the master toggle)
-      // User asked: "turn off auto-dismissal options... message still gets dismissed".
-      // So if master toggle is off, nothing should auto-dismiss.
+      // The master toggle controls all auto-dismissal (pinnedDuration is only for the Pinned widget).
+      // Count from when the message went on air, so a message restored after a reload keeps its timing.
+      const startedAt = messageState.featuredMessage.featuredAt ?? Date.now();
+      const delay = Math.max(0, startedAt + settings.autoDismissSeconds * 1000 - Date.now());
       if (settings.autoDismissEnabled) {
         autoDismissTimerRef.current = window.setTimeout(() => {
           // Double check: ensure master toggle is still on and message is still featured
           if (settingsRef.current.autoDismissEnabled && messageState.featuredMessage) {
             markAsRead(messageState.featuredMessage.id);
           }
-        }, durationSeconds * 1000);
+        }, delay);
       }
     }
 
@@ -96,12 +83,11 @@ const App: React.FC = () => {
     };
   }, [messageState.featuredMessage, settings.autoDismissEnabled, settings.autoDismissSeconds, markAsRead]);
 
-  // Clear featured on home page load
+  // When nothing is on air, the next queued message goes on air.
   useEffect(() => {
-    if (location.pathname === '/') {
-      broadcastFeatured(null);
-    }
-  }, [location.pathname, broadcastFeatured]);
+    if (isOverlay || messageState.featuredMessage || messageState.queue.length === 0) return;
+    featureMessage(messageState.queue[0]);
+  }, [isOverlay, messageState.featuredMessage, messageState.queue, featureMessage]);
 
   // Launch prompt logic
   useEffect(() => {
@@ -110,52 +96,13 @@ const App: React.FC = () => {
     }
   }, [settings.youtubeApiKey, settings.youtubeVideoId, location.pathname]);
 
-  // Handle Twitch OAuth Redirect - Handled by AuthHandler route now
-  // We keep this clear just in case, but real logic is in AuthHandler
+  // Logged in but no channel set (e.g. it was cleared in Settings): use the login's own channel.
   useEffect(() => {
-    // If we happen to be on root but hash has token (rare race condition), AuthHandler might pick it up via wildcard dispatch
-    // but just to be safe, we let router handle it.
-  }, []);
-
-  // Auto-fetch Twitch Username if we have a token but no channel name (e.g. from .env)
-  useEffect(() => {
-    if (settings.twitchAccessToken && !settings.twitchChannel) {
-      const clientId = settings.twitchClientId || import.meta.env.VITE_TWITCH_CLIENT_ID;
-
-      // We need a client ID to make requests
-      if (!clientId) return;
-
-      console.log("App: Token present but no channel name. Attempting to fetch user details...");
-
-      // Clean token (remove oauth: prefix if present)
-      const cleanToken = settings.twitchAccessToken.replace(/^oauth:/i, '');
-
-      fetch('https://api.twitch.tv/helix/users', {
-        headers: {
-          'Client-ID': clientId,
-          'Authorization': `Bearer ${cleanToken}`
-        }
-      })
-        .then(res => {
-          if (!res.ok) throw new Error(`Failed to fetch user: ${res.status}`);
-          return res.json();
-        })
-        .then(data => {
-          if (data.data && data.data.length > 0) {
-            const user = data.data[0];
-            console.log("App: Auto-fetched user:", user.login);
-
-            setSettings(prev => ({
-              ...prev,
-              twitchChannel: user.login
-            }));
-          }
-        })
-        .catch(err => {
-          console.warn("App: Could not auto-fetch Twitch username:", err);
-        });
-    }
-  }, [settings.twitchAccessToken, settings.twitchChannel, settings.twitchClientId, setSettings]);
+    if (!settings.twitchAccessToken || settings.twitchChannel) return;
+    validateTwitchToken(settings.twitchAccessToken)
+      .then(info => { if (info) setSettings(prev => ({ ...prev, twitchChannel: info.login })); })
+      .catch(() => { /* offline — the Twitch client reports it */ });
+  }, [settings.twitchAccessToken, settings.twitchChannel, setSettings]);
 
   const triggerTestMessages = useCallback(() => {
     const dummyNames = ["CyberPunk_2077", "StreamGod", "PixelViper", "GlitchMaster", "NebulaKnight", "EchoAlpha"];
@@ -289,7 +236,9 @@ const App: React.FC = () => {
               onMarkRead={markAsRead}
               onMarkTrash={markAsTrashed}
               onToggleInteresting={toggleInteresting}
+              onToggleQueue={toggleQueued}
               onClearFeatured={clearFeatured}
+              shortcutsEnabled={!isSettingsOpen && !showLaunchPrompt}
               onOpenSettings={() => setIsSettingsOpen(true)}
               onTwitchLogin={handleTwitchLogin}
             />
@@ -298,7 +247,7 @@ const App: React.FC = () => {
         <Route
           path="/overlay"
           element={
-            <Overlay featuredMessage={messageState.featuredMessage} hypeTrain={settings.showHypeTrain ? hypeTrain : null} />
+            <Overlay hypeTrain={settings.showHypeTrain ? hypeTrain : null} />
           }
         />
         {/* Catch-all for Twitch OAuth redirect which HashRouter sees as a path starting with access_token */}

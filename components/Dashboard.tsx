@@ -1,491 +1,377 @@
-
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { AppState, ChatMessage, StreamStats, HypeTrainData } from '../types';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Virtuoso, VirtuosoHandle } from 'react-virtuoso';
+import { Check, Copy, Layers, Settings, X, Zap } from 'lucide-react';
+import { AppState, ChatMessage, HypeTrainData, StreamStats } from '../types';
 import MessageItem from './MessageItem';
 import { PinnedMessagesWidget } from './PinnedMessagesWidget';
+import StatusMenu from './StatusMenu';
+import { OverlayScene, ScaledStage } from './OverlayScene';
 import { TwitchIcon, YouTubeIcon } from './icons/PlatformIcons';
-import { Virtuoso, VirtuosoHandle } from 'react-virtuoso';
-import {
-  Settings,
-  Copy,
-  Layers,
-  MessageSquare,
-  Zap,
-  AlertCircle,
-  Loader2,
-  Check,
-  BarChart3,
-  ExternalLink,
-  ShieldCheck,
-  Edit2,
-  MousePointer2,
-  Bookmark,
-  Trash2,
-  Keyboard,
-  Clock,
-  Coins,
-  LogIn
-} from 'lucide-react';
+import { useNow } from '@/src/hooks/useNow';
 
 interface DashboardProps {
   state: AppState;
   hypeTrain?: HypeTrainData | null;
+  /** False while a modal is open, so typing doesn't trigger shortcuts. */
+  shortcutsEnabled: boolean;
   onFeature: (id: string) => void;
   onMarkRead: (id: string) => void;
   onMarkTrash: (id: string) => void;
   onToggleInteresting: (id: string) => void;
+  onToggleQueue: (id: string) => void;
   onClearFeatured: () => void;
   onOpenSettings: () => void;
   onTwitchLogin: () => void;
 }
 
-const QUOTA_LIMIT = 10000;
+type Filter = 'all' | 'unread' | 'money' | 'subs' | 'starred';
 
-const NumericCountdown: React.FC<{ duration: number; enabled: boolean; featuredAt?: number }> = ({ duration, enabled, featuredAt }) => {
-  const [percentage, setPercentage] = useState(100);
+const FILTERS: { id: Filter; label: string; test: (m: ChatMessage) => boolean }[] = [
+  { id: 'all', label: 'All', test: () => true },
+  { id: 'unread', label: 'Unread', test: m => !m.isRead },
+  { id: 'money', label: 'Money', test: m => !!m.donationAmount },
+  { id: 'subs', label: 'Subs & raids', test: m => m.eventType === 'subscription' || m.eventType === 'raid' },
+  { id: 'starred', label: 'Starred', test: m => !!m.isInteresting },
+];
 
-  useEffect(() => {
-    if (!enabled || duration <= 0 || !featuredAt) return;
+const formatClock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 
-    const interval = setInterval(() => {
-      const now = Date.now();
-      const elapsed = now - featuredAt;
-      const total = duration * 1000;
-      const remaining = Math.max(0, 100 - (elapsed / total) * 100);
-      setPercentage(remaining);
-    }, 50);
+// ── Top bar ──────────────────────────────────────────────────────────────────
 
-    return () => clearInterval(interval);
-  }, [duration, enabled, featuredAt]);
-
-  if (!enabled || !featuredAt) return null;
-
+const ViewerPill: React.FC<{ platform: 'twitch' | 'youtube'; stats: StreamStats; configured: boolean }> = ({ platform, stats, configured }) => {
+  const isTwitch = platform === 'twitch';
+  const live = isTwitch ? !!stats.isLive : stats.status === 'online';
+  const unknown = !configured || !!stats.authIssue || (isTwitch ? stats.status === 'error' && !stats.isLive : stats.status !== 'online');
   return (
-    <div className="relative overflow-hidden flex items-center gap-1.5 px-3 py-1 bg-indigo-500/20 border border-indigo-500/30 rounded-full w-full">
-      <div
-        className="absolute inset-y-0 left-0 bg-indigo-500/40 transition-all duration-75 ease-linear"
-        style={{ width: `${percentage}%` }}
-      />
+    <div className="flex items-center gap-2.5 pl-2.5 pr-3 py-1.5 rounded-xl border border-slate-800 bg-slate-950" title={stats.title || undefined}>
+      {isTwitch ? <TwitchIcon className="w-3.5 h-3.5 text-[#a970ff] fill-current" /> : <YouTubeIcon className="w-4 h-4" />}
+      <span className={`w-2 h-2 rounded-full ${live ? 'bg-red-500 shadow-[0_0_0_3px_rgba(239,68,68,0.25)]' : 'bg-slate-600'}`} aria-label={live ? 'Live' : 'Offline'} />
+      <span className={`font-mono font-bold text-[15px] tabular-nums ${live ? 'text-white' : 'text-slate-500'}`}>
+        {unknown ? '—' : stats.viewers.toLocaleString()}
+      </span>
+      <span className="text-[11px] text-slate-500">viewers</span>
     </div>
   );
 };
 
-const StatusIndicator: React.FC<{
-  platform: string;
-  stats: StreamStats;
-  icon: React.ReactNode;
-  onReconnect?: () => void;
-}> = ({ platform, stats, icon, onReconnect }) => {
-  const isOnline = stats.status === 'online';
-  const isConnecting = stats.status === 'connecting';
-  const isError = stats.status === 'error';
-  const isLive = isOnline && !!stats.isLive;
-  const isQuotaError = stats.errorMessage?.includes('Quota');
+// ── Side panel pieces ───────────────────────────────────────────────────────
+
+const SectionHeading: React.FC<{ children: React.ReactNode; right?: React.ReactNode }> = ({ children, right }) => (
+  <div className="flex items-center justify-between gap-2 text-[10px] font-black uppercase tracking-[0.15em] text-slate-500">
+    <span className="flex items-center gap-2">{children}</span>
+    {right}
+  </div>
+);
+
+const OnAirPanel: React.FC<{
+  featured: ChatMessage | null;
+  hypeTrain?: HypeTrainData | null;
+  autoDismissEnabled: boolean;
+  autoDismissSeconds: number;
+  onClear: () => void;
+}> = ({ featured, hypeTrain, autoDismissEnabled, autoDismissSeconds, onClear }) => {
+  // Keep the last message around so the preview can animate it out.
+  const [shown, setShown] = useState<ChatMessage | null>(featured);
+  useEffect(() => { if (featured) setShown(featured); }, [featured]);
+
+  const counting = !!featured && autoDismissEnabled && !!featured.featuredAt;
+  const now = useNow(250, counting);
+  const secondsLeft = counting ? Math.max(0, Math.ceil((featured!.featuredAt! + autoDismissSeconds * 1000 - now) / 1000)) : null;
 
   return (
-    <div className={`p-3 rounded-xl bg-slate-900 border transition-colors flex flex-col min-h-[84px] ${isError ? 'border-red-500/50' : isLive ? 'border-red-500/30' : isOnline ? 'border-emerald-500/20' : 'border-slate-800'}`}>
-      <div className="text-slate-500 text-[10px] mb-1 flex items-center justify-between gap-1 uppercase font-bold tracking-wider">
-        <span className="flex items-center gap-1">{icon} {platform}</span>
-        {isConnecting && <Loader2 size={10} className="animate-spin text-indigo-400" />}
-        {isError && <AlertCircle size={10} className="text-red-500" />}
-        {isLive && (
-          <span className="flex items-center gap-1 text-red-500">
-            <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
-            LIVE
-          </span>
-        )}
-      </div>
-      {isError ? (
-        <div className="mt-auto flex flex-col">
-          <span className="text-red-400 text-[9px] leading-tight font-black uppercase" title={stats.errorMessage}>
-            {isQuotaError ? 'Quota Exceeded' : (stats.errorMessage || 'Failed')}
-          </span>
-          {isQuotaError && (
-            <a
-              href="https://console.cloud.google.com/apis/api/youtube.googleapis.com/quotas"
-              target="_blank"
-              className="text-[8px] text-indigo-400 hover:underline flex items-center gap-1 mt-0.5"
-            >
-              Check Limits <ExternalLink size={8} />
-            </a>
-          )}
-          {onReconnect && (
-            <button
-              onClick={onReconnect}
-              className="mt-2 flex items-center justify-center gap-1.5 px-2 py-1.5 bg-[#9146FF] hover:bg-[#7a2ce8] text-white rounded text-[9px] font-bold uppercase tracking-wider transition-all shadow-lg active:scale-95 w-full"
-            >
-              <LogIn size={10} /> Connect
-            </button>
-          )}
-        </div>
-      ) : (
-        <div className="mt-auto flex flex-col">
-          <span className={`font-mono font-bold text-xl ${isLive ? 'text-white' : 'text-slate-500'}`}>
-            {stats.authIssue ? '—' : stats.viewers.toLocaleString()}
-          </span>
-          <span className={`text-[9px] font-bold uppercase tracking-widest ${
-            isLive ? 'text-red-400' : isOnline ? 'text-emerald-500' : isConnecting ? 'text-indigo-400' : 'text-slate-600'
-          }`}>
-            {isConnecting ? 'connecting' : isLive ? 'live' : isOnline ? 'chat connected' : 'offline'}
-          </span>
-          {stats.authIssue ? (
-            <>
-              <span className="text-amber-400 text-[9px] leading-tight font-black uppercase tracking-wider mt-1" title="Twitch rejected the saved login. Chat still works, but the viewer count and Hype Train need a fresh login.">
-                Login expired
-              </span>
-              {onReconnect && (
-                <button
-                  onClick={onReconnect}
-                  className="mt-2 flex items-center justify-center gap-1.5 px-2 py-1.5 bg-[#9146FF] hover:bg-[#7a2ce8] text-white rounded text-[9px] font-bold uppercase tracking-wider transition-all shadow-lg active:scale-95 w-full"
-                >
-                  <LogIn size={10} /> Reconnect
-                </button>
-              )}
-            </>
-          ) : stats.tokenExpiresAt && stats.tokenExpiresAt - Date.now() < 7 * 24 * 3600 * 1000 ? (
-            <span className="text-amber-400/80 text-[9px] font-bold uppercase tracking-wider mt-1" title="Log in to Twitch again before then to keep the viewer count working.">
-              Login expires in {Math.max(0, Math.ceil((stats.tokenExpiresAt - Date.now()) / (24 * 3600 * 1000)))} d
-            </span>
-          ) : null}
-        </div>
-      )}
-    </div>
-  );
-};
-
-const QuotaTracker: React.FC<{ used: number, onEdit: () => void }> = ({ used, onEdit }) => {
-  const percentage = Math.min((used / QUOTA_LIMIT) * 100, 100);
-  const isHigh = percentage > 80;
-  const isExceeded = percentage >= 100;
-
-  return (
-    <div className="bg-slate-900/50 border border-slate-800/50 rounded-xl p-3 space-y-2 group transition-all">
-      <div className="flex justify-between items-center">
-        <h3 className="text-[9px] font-black uppercase text-slate-500 flex items-center gap-1.5">
-          <ShieldCheck size={10} className={isExceeded ? 'text-red-500' : isHigh ? 'text-amber-500' : 'text-emerald-500'} />
-          API Quota (Estimated)
-        </h3>
-        <button
-          onClick={onEdit}
-          className="p-1 opacity-0 group-hover:opacity-100 text-slate-500 hover:text-white transition-all bg-slate-800 rounded"
-          title="Manual Sync"
-        >
-          <Edit2 size={8} />
-        </button>
-      </div>
-      <div className="h-1.5 w-full bg-slate-950 rounded-full overflow-hidden">
-        <div
-          className={`h-full transition-all duration-500 ${isExceeded ? 'bg-red-500' : isHigh ? 'bg-amber-500' : 'bg-indigo-500'}`}
-          style={{ width: `${percentage}%` }}
-        />
-      </div>
-      <div className="flex justify-between items-center text-[9px] font-bold">
-        <span className={`${isExceeded ? 'text-red-500' : 'text-slate-500'}`}>
-          {used.toLocaleString()} / {QUOTA_LIMIT.toLocaleString()}
+    <div className="flex flex-col gap-3">
+      <SectionHeading right={
+        <span className="font-mono normal-case tracking-normal text-[11px] text-slate-400">
+          {featured ? (secondsLeft !== null ? `${secondsLeft} s left` : 'until dismissed') : 'idle'}
         </span>
-        <a
-          href="https://console.cloud.google.com/apis/api/youtube.googleapis.com/quotas"
-          target="_blank"
-          className="text-indigo-400 hover:underline flex items-center gap-1"
-        >
-          Console <ExternalLink size={8} />
-        </a>
+      }>
+        <span className={`flex items-center gap-1.5 ${featured ? 'text-red-400' : ''}`}>
+          <span className={`w-2 h-2 rounded-full ${featured ? 'bg-red-500 animate-pulse motion-reduce:animate-none' : 'bg-slate-600'}`} />
+          On air
+        </span>
+      </SectionHeading>
+
+      <ScaledStage className="rounded-xl border border-slate-800 bg-[radial-gradient(120%_90%_at_75%_20%,#2b3a55_0%,#161b2a_45%,#0b0d14_100%)]">
+        <OverlayScene
+          message={shown}
+          visible={!!featured}
+          hypeTrain={hypeTrain}
+          durationSeconds={autoDismissEnabled ? autoDismissSeconds : 0}
+          featuredAt={featured?.featuredAt ?? null}
+        />
+        {!featured && !hypeTrain?.isActive && (
+          <div className="absolute inset-0 flex items-center justify-center text-[56px] font-semibold text-white/25 text-center px-40">
+            Nothing on air. Click a message or press Enter.
+          </div>
+        )}
+      </ScaledStage>
+
+      <button
+        type="button"
+        onClick={onClear}
+        disabled={!featured}
+        className="self-start px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-900 text-xs font-bold text-slate-200 hover:border-red-500/60 hover:text-red-300 disabled:opacity-40 disabled:hover:border-slate-700 disabled:hover:text-slate-200"
+      >
+        Take off air · Esc
+      </button>
+    </div>
+  );
+};
+
+const QueuePanel: React.FC<{ queue: ChatMessage[]; onRemove: (id: string) => void }> = ({ queue, onRemove }) => (
+  <div className="flex flex-col gap-2">
+    <SectionHeading right={<span className="normal-case tracking-normal font-mono text-[11px] text-slate-400">{queue.length ? `${queue.length} queued` : ''}</span>}>
+      Up next
+    </SectionHeading>
+    {queue.length === 0 ? (
+      <p className="text-xs text-slate-500 leading-relaxed">Press <kbd className="kbd">Q</kbd> on a message to line it up. It goes on air when the current one ends.</p>
+    ) : (
+      <ol className="flex flex-col gap-1.5">
+        {queue.map((m, i) => (
+          <li key={m.id} className="flex items-center gap-2 px-2.5 py-2 rounded-lg border border-dashed border-slate-700 text-[13px] min-w-0">
+            <span className="font-mono text-[11px] text-slate-500">{i + 1}</span>
+            <b className="shrink-0 text-slate-100">{m.author}</b>
+            <span className="truncate text-slate-400 min-w-0">{m.text}</span>
+            <button type="button" onClick={() => onRemove(m.id)} aria-label={`Remove ${m.author} from queue`} className="ml-auto shrink-0 p-1 rounded text-slate-500 hover:text-white hover:bg-slate-800">
+              <X size={12} />
+            </button>
+          </li>
+        ))}
+      </ol>
+    )}
+  </div>
+);
+
+const HypeTrainCard: React.FC<{ data: HypeTrainData }> = ({ data }) => {
+  const now = useNow(1000);
+  const percent = Math.min(100, Math.floor((data.progress / Math.max(1, data.goal)) * 100));
+  const secondsLeft = data.expiryDate ? Math.max(0, Math.round((new Date(data.expiryDate).getTime() - now) / 1000)) : null;
+  return (
+    <div className="rounded-xl border border-purple-500/35 bg-purple-500/[0.06] p-3.5 flex flex-col gap-2.5">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="flex items-baseline gap-2">
+          <Zap size={14} className="text-yellow-300 fill-yellow-300 self-center" />
+          <span className="font-black text-lg italic text-white">Hype Train</span>
+          <span className="text-xs font-bold text-slate-400">LVL {data.level}</span>
+          {data.isTest && <span className="text-[9px] font-black uppercase tracking-wider text-amber-300 bg-amber-500/10 px-1.5 py-0.5 rounded">Test</span>}
+        </span>
+        {secondsLeft !== null && <span className="font-mono font-bold text-purple-300 tabular-nums">{formatClock(secondsLeft)}</span>}
+      </div>
+      <div className="h-2 rounded-full bg-slate-950 overflow-hidden">
+        <div className="h-full bg-gradient-to-r from-[#7b5cff] to-[#a970ff] transition-all duration-500" style={{ width: `${percent}%` }} />
+      </div>
+      <div className="flex justify-between text-[11px] font-mono text-slate-400">
+        <span>{data.progress.toLocaleString()} / {data.goal.toLocaleString()} to LVL {data.level + 1}</span>
+        <span>{percent}%</span>
       </div>
     </div>
   );
 };
 
-const DashboardHypeTrainWidget: React.FC<{ data: HypeTrainData }> = ({ data }) => {
-  if (!data?.isActive) return null;
+// ── Dashboard ────────────────────────────────────────────────────────────────
 
-  const percent = Math.min(100, Math.floor((data.progress / data.goal) * 100));
-
-  return (
-    <div className="p-4 rounded-xl bg-slate-900 border border-purple-500/30 relative overflow-hidden group">
-      <div className="absolute inset-0 bg-purple-600/5 animate-pulse"></div>
-
-      <div className="relative z-10 space-y-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2 text-purple-400 font-black text-[10px] uppercase tracking-widest">
-            <Zap size={12} className="fill-current animate-bounce" />
-            Hype Train
-          </div>
-          <span className="text-white font-black text-sm italic">LVL {data.level}</span>
-        </div>
-
-        <div className="h-2 w-full bg-slate-950 rounded-full overflow-hidden border border-white/5">
-          <div
-            className="h-full bg-gradient-to-r from-purple-500 to-pink-500 transition-all duration-500 ease-out"
-            style={{ width: `${percent}%` }}
-          />
-        </div>
-
-        <div className="flex justify-between items-end">
-          <div className="flex flex-col">
-            <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wider">Progress</span>
-            <span className="text-xs font-mono font-bold text-white">{Math.floor(percent)}%</span>
-          </div>
-          {data.expiryDate && (
-            <div className="flex flex-col items-end">
-              <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wider">Ends In</span>
-              <span className="text-xs font-mono font-bold text-white flex items-center gap-1">
-                <Clock size={10} />
-                {Math.floor((new Date(data.expiryDate).getTime() - Date.now()) / 1000)}s
-              </span>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
+const isTypingTarget = (el: EventTarget | null) => {
+  const node = el as HTMLElement | null;
+  return !!node && (node.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(node.tagName));
 };
 
 const Dashboard: React.FC<DashboardProps> = ({
-  state,
-  hypeTrain,
-  onFeature,
-  onMarkRead,
-  onMarkTrash,
-  onToggleInteresting,
-  onClearFeatured,
-  onOpenSettings,
-  onTwitchLogin
+  state, hypeTrain, shortcutsEnabled,
+  onFeature, onMarkRead, onMarkTrash, onToggleInteresting, onToggleQueue, onClearFeatured, onOpenSettings, onTwitchLogin,
 }) => {
+  const [filter, setFilter] = useState<Filter>('all');
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
+  const { settings } = state;
+
+  const visible = useMemo(() => state.messages.filter(FILTERS.find(f => f.id === filter)!.test), [state.messages, filter]);
+  const counts = useMemo(
+    () => Object.fromEntries(FILTERS.map(f => [f.id, state.messages.filter(f.test).length])) as Record<Filter, number>,
+    [state.messages]
+  );
+  const queuePositions = useMemo(() => new Map(state.queue.map((id, i) => [id, i + 1])), [state.queue]);
+  const queuedMessages = useMemo(
+    () => state.queue.map(id => state.messages.find(m => m.id === id)).filter((m): m is ChatMessage => !!m),
+    [state.queue, state.messages]
+  );
 
   const copyOverlayUrl = () => {
     const url = `${window.location.origin}${window.location.pathname}#/overlay`;
-    navigator.clipboard.writeText(url);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    navigator.clipboard.writeText(url).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }).catch(() => window.prompt('Copy the overlay link:', url));
   };
 
-  const handleScrollToMessage = useCallback((id: string) => {
-    const index = state.messages.findIndex(m => m.id === id);
+  const scrollToMessage = useCallback((id: string, highlight = false) => {
+    let index = visible.findIndex(m => m.id === id);
+    if (index === -1 && highlight) {
+      setFilter('all');
+      index = state.messages.findIndex(m => m.id === id);
+    }
     if (index === -1) return;
-    virtuosoRef.current?.scrollToIndex({ index, behavior: 'smooth', align: 'center' });
-    // After scrolling, highlight the element once it’s rendered
-    setTimeout(() => {
-      const el = document.getElementById(`message-${id}`);
-      if (el) {
-        el.classList.add('ring-2', 'ring-emerald-500');
-        setTimeout(() => el.classList.remove('ring-2', 'ring-emerald-500'), 1000);
-      }
-    }, 300);
-  }, [state.messages]);
+    virtuosoRef.current?.scrollIntoView({ index, behavior: 'smooth' });
+    if (highlight) setSelectedId(id);
+  }, [visible, state.messages]);
 
-  const unreadCount = state.messages.filter(m => !m.isRead).length;
+  // Keyboard: J/K move, Enter on air, Q queue, S star, D done, Esc take off air.
+  useEffect(() => {
+    if (!shortcutsEnabled) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || isTypingTarget(e.target)) return;
+      const key = e.key.toLowerCase();
+      const index = selectedId ? visible.findIndex(m => m.id === selectedId) : -1;
+      const selected = index >= 0 ? visible[index] : null;
+
+      const move = (delta: number) => {
+        if (!visible.length) return;
+        const next = Math.min(visible.length - 1, Math.max(0, index === -1 ? 0 : index + delta));
+        setSelectedId(visible[next].id);
+        virtuosoRef.current?.scrollIntoView({ index: next });
+      };
+
+      switch (key) {
+        case 'j': case 'arrowdown': e.preventDefault(); move(1); return;
+        case 'k': case 'arrowup': e.preventDefault(); move(-1); return;
+        case 'escape': if (state.featuredMessage) { e.preventDefault(); onClearFeatured(); } return;
+      }
+      if (!selected) return;
+      switch (key) {
+        case 'enter': e.preventDefault(); selected.isFeatured ? onMarkRead(selected.id) : onFeature(selected.id); return;
+        case 'q': e.preventDefault(); onToggleQueue(selected.id); return;
+        case 's': e.preventDefault(); onToggleInteresting(selected.id); return;
+        case 'd': e.preventDefault(); onMarkTrash(selected.id); move(1); return;
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [shortcutsEnabled, visible, selectedId, state.featuredMessage, onFeature, onMarkRead, onToggleQueue, onToggleInteresting, onMarkTrash, onClearFeatured]);
+
+  const twitchConfigured = !!settings.twitchChannel;
+  const youtubeConfigured = !!(settings.youtubeApiKey && settings.youtubeVideoId);
+  const needsTwitchLogin = twitchConfigured && (!!state.stats.twitch.authIssue || !settings.twitchAccessToken);
 
   return (
-    <div className="flex flex-1 bg-slate-950 h-full overflow-hidden">
-      <main className="flex-1 flex flex-col md:flex-row h-full overflow-hidden">
-        <section className="flex-1 flex flex-col min-w-0 border-r border-slate-800 bg-slate-900/50">
-          <header className="p-4 border-b border-slate-800 flex flex-wrap justify-between items-center bg-slate-950/80 backdrop-blur-xl sticky top-0 z-20 gap-4">
-            <div className="flex items-center space-x-4">
-              <div className="w-10 h-10 bg-gradient-to-br from-indigo-600 to-violet-700 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-500/20 group relative cursor-help">
-                <MessageSquare className="text-white w-6 h-6" />
-                <div className="absolute top-full left-0 mt-2 w-max px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-[10px] font-bold text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 shadow-xl uppercase tracking-wider">
-                  Live Feed Status
-                </div>
-              </div>
-              <div>
-                <h1 className="text-lg font-black text-white flex items-center gap-2 tracking-tight">
-                  STREAM FEED <span className={`flex h-2 w-2 rounded-full ${state.messages.length > 0 ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`} title={state.messages.length > 0 ? "Feed Active" : "No recent activity"}></span>
-                </h1>
-              </div>
-            </div>
+    <div className="flex flex-col h-full w-full bg-slate-950 text-slate-100 overflow-hidden">
+      {/* Top bar */}
+      <header className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5 border-b border-slate-800 bg-slate-900/80">
+        <div className="flex items-center gap-2 mr-2 font-black text-[17px] tracking-tight">
+          <span className="relative w-6 h-6 rounded-md bg-indigo-500"><span className="absolute inset-[7px] rounded-full bg-slate-950" /></span>
+          StreamLink
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <ViewerPill platform="twitch" stats={state.stats.twitch} configured={twitchConfigured} />
+          <ViewerPill platform="youtube" stats={state.stats.youtube} configured={youtubeConfigured} />
+        </div>
+        <div className="ml-auto flex items-center gap-2">
+          {needsTwitchLogin && (
+            <button type="button" onClick={onTwitchLogin} className="px-3 py-1.5 rounded-lg bg-[#9146FF] hover:bg-[#7a2ce8] text-white text-xs font-bold">
+              {settings.twitchAccessToken ? 'Reconnect Twitch' : 'Log in to Twitch'}
+            </button>
+          )}
+          <StatusMenu
+            twitch={state.stats.twitch}
+            youtube={state.stats.youtube}
+            twitchChannel={settings.twitchChannel}
+            youtubeConfigured={youtubeConfigured}
+            quotaUsage={state.quotaUsage}
+            onTwitchLogin={onTwitchLogin}
+            onOpenSettings={onOpenSettings}
+          />
+          <button
+            type="button"
+            onClick={copyOverlayUrl}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-bold ${copied ? 'border-emerald-500 text-emerald-300 bg-emerald-500/10' : 'border-slate-700 bg-slate-900 text-slate-200 hover:border-slate-500'}`}
+          >
+            {copied ? <Check size={13} /> : <Copy size={13} />} {copied ? 'Copied' : 'Overlay link'}
+          </button>
+          <button type="button" onClick={onOpenSettings} aria-label="Settings" className="p-2 rounded-lg border border-slate-700 bg-slate-900 text-slate-300 hover:text-white hover:border-slate-500">
+            <Settings size={15} />
+          </button>
+        </div>
+      </header>
 
-            <div className="flex items-center gap-2 ml-auto">
-              <div className="hidden lg:flex items-center gap-2 px-3 py-1.5 bg-slate-900 rounded-lg border border-slate-800 mr-2">
-                {/* Sync indicator only active when at least one service is online */}
-                <div className={`w-2 h-2 rounded-full ${state.stats.twitch.status === 'online' || state.stats.youtube.status === 'online' ? 'bg-emerald-500 animate-pulse' : 'bg-slate-700'}`}></div>
-                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Live Syncing</span>
-              </div>
-
+      <main className="flex-1 min-h-0 flex flex-col lg:grid lg:grid-cols-[minmax(0,1fr)_400px]">
+        {/* Feed */}
+        <section className="flex-1 flex flex-col min-h-0 min-w-0 lg:border-r border-slate-800">
+          <nav className="flex gap-1 px-3 py-2 border-b border-slate-800 overflow-x-auto" aria-label="Feed filters">
+            {FILTERS.map(f => (
               <button
-                onClick={copyOverlayUrl}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold transition-all border ${copied ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400' : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'}`}
+                key={f.id}
+                type="button"
+                aria-pressed={filter === f.id}
+                onClick={() => setFilter(f.id)}
+                className={`px-2.5 py-1 rounded-md text-xs font-semibold whitespace-nowrap ${filter === f.id ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-slate-200'}`}
               >
-                {copied ? <Check size={14} /> : <Copy size={14} />}
-                {copied ? 'Copied!' : 'Copy Overlay Link'}
+                {f.label}<span className="ml-1.5 font-mono text-[11px] text-slate-500">{counts[f.id]}</span>
               </button>
-              <div className="w-px h-6 bg-slate-800 mx-1" />
-              <button
-                onClick={onOpenSettings}
-                className="p-2 text-slate-400 hover:text-white bg-slate-800 rounded-lg hover:bg-slate-700 transition-all"
-                title="Settings"
-              >
-                <Settings size={20} />
-              </button>
-            </div>
-          </header>
+            ))}
+          </nav>
 
-          {/* Virtualized message list — only visible rows are in the DOM */}
           {state.messages.length === 0 ? (
-            <div className="flex-1 overflow-y-auto">
-              <div className="h-full flex flex-col items-center justify-center text-slate-600 space-y-4">
-                <div className="p-6 rounded-full bg-slate-800/50 animate-pulse">
-                  <Zap size={48} className="opacity-20" />
-                </div>
-                <div className="text-center max-w-xs">
-                  <p className="text-lg font-bold text-slate-400">Feed is silent...</p>
-                  <p className="text-xs mt-2 leading-relaxed">Connect your accounts in settings to start capturing live comments.</p>
-                  <button
-                    onClick={onOpenSettings}
-                    className="mt-6 px-6 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold rounded-xl transition-all shadow-xl shadow-indigo-600/20"
-                  >
-                    Configuration
-                  </button>
-                </div>
-              </div>
+            <div className="flex-1 flex flex-col items-center justify-center gap-3 text-center px-6 text-slate-500">
+              <Layers size={36} className="opacity-30" />
+              <p className="text-base font-bold text-slate-300">No messages yet</p>
+              <p className="text-sm max-w-xs">
+                {twitchConfigured || youtubeConfigured
+                  ? 'Chat shows up here as soon as someone writes.'
+                  : 'Log in to Twitch or add a YouTube stream in Settings to start.'}
+              </p>
+              {!twitchConfigured && !youtubeConfigured && (
+                <button type="button" onClick={onOpenSettings} className="mt-2 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold">Open settings</button>
+              )}
             </div>
+          ) : visible.length === 0 ? (
+            <div className="flex-1 flex items-center justify-center text-sm text-slate-500">Nothing in this filter yet.</div>
           ) : (
             <Virtuoso
               ref={virtuosoRef}
               className="flex-1 custom-scrollbar"
               style={{ flex: '1 1 auto', minHeight: 0 }}
-              data={state.messages}
-              followOutput="smooth"
-              components={{
-                Header: () => (
-                  <div className="flex flex-wrap items-center gap-x-6 gap-y-2 px-4 pt-4 pb-2">
-                    <div className="flex flex-wrap items-center gap-x-6 gap-y-2 px-3 py-2.5 w-full bg-indigo-500/5 rounded-xl border border-indigo-500/10">
-                      <div className="flex items-center gap-2 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                        <MousePointer2 size={12} className="text-indigo-500" />
-                        Click: Feature
-                      </div>
-                      <div className="flex items-center gap-2 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                        <Bookmark size={12} className="text-amber-500" />
-                        Right-Click: Interesting
-                      </div>
-                      <div className="flex items-center gap-2 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                        <Trash2 size={12} className="text-red-500" />
-                        Trash Icon: Trash/Done
-                      </div>
-                      <div className="flex items-center gap-2 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                        <Keyboard size={12} className="text-slate-200" />
-                        ESC: Clear Featured
-                      </div>
-                    </div>
-                  </div>
-                ),
-              }}
-              itemContent={(_index, msg) => (
-                <div className="px-4 pb-3">
+              data={visible}
+              computeItemKey={(_i, m) => m.id}
+              itemContent={(_i, msg) => (
+                <div className="px-2 py-0.5">
                   <MessageItem
-                    key={msg.id}
                     message={msg}
-                    onFeature={onFeature}
+                    isSelected={msg.id === selectedId}
+                    queuePosition={queuePositions.get(msg.id)}
+                    onFeature={(id) => { setSelectedId(id); onFeature(id); }}
                     onMarkRead={onMarkRead}
                     onMarkTrash={onMarkTrash}
                     onToggleInteresting={onToggleInteresting}
+                    onToggleQueue={onToggleQueue}
                   />
                 </div>
               )}
             />
           )}
+
+          <footer className="hidden md:flex flex-wrap gap-x-4 gap-y-1 px-4 py-2 border-t border-slate-800 text-[11px] text-slate-500">
+            <span><kbd className="kbd">J</kbd><kbd className="kbd">K</kbd> move</span>
+            <span><kbd className="kbd">Enter</kbd> put on air</span>
+            <span><kbd className="kbd">Q</kbd> queue</span>
+            <span><kbd className="kbd">S</kbd> star</span>
+            <span><kbd className="kbd">D</kbd> done</span>
+            <span><kbd className="kbd">Esc</kbd> take off air</span>
+            <span className="ml-auto">Right-click to star</span>
+          </footer>
         </section>
 
-        <section className="w-full md:w-80 lg:w-96 bg-slate-950 flex flex-col p-6 space-y-6 overflow-y-auto custom-scrollbar">
-          <div className="space-y-4">
-            <h2 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 flex items-center gap-2">
-              <BarChart3 size={12} /> Live Audience
-            </h2>
-            <div className="grid grid-cols-2 gap-3">
-              <StatusIndicator
-                platform="Twitch"
-                stats={state.stats.twitch}
-                icon={<TwitchIcon className="w-3 h-3 text-purple-400 fill-current" />}
-                onReconnect={(state.stats.twitch.status === 'error' || state.stats.twitch.status === 'offline' || state.stats.twitch.authIssue) ? onTwitchLogin : undefined}
-              />
-              <StatusIndicator
-                platform="YouTube"
-                stats={state.stats.youtube}
-                icon={<YouTubeIcon className="w-3 h-3" />}
-              />
-            </div>
-          </div>
-
-          {/* Hype Train Widget */}
-          {hypeTrain && hypeTrain.isActive && (
-            <div className="animate-in fade-in slide-in-from-right duration-500">
-              <DashboardHypeTrainWidget data={hypeTrain} />
-            </div>
-          )}
-
-          {/* Pinned Donations Widget */}
-          <PinnedMessagesWidget
-            messages={state.messages}
-            onMessageClick={handleScrollToMessage}
+        {/* Side panel */}
+        <aside className="flex flex-col gap-6 p-4 bg-slate-900/50 overflow-y-auto custom-scrollbar min-w-0 max-h-[45vh] lg:max-h-none border-t lg:border-t-0 border-slate-800">
+          <OnAirPanel
+            featured={state.featuredMessage}
+            hypeTrain={hypeTrain}
+            autoDismissEnabled={settings.autoDismissEnabled}
+            autoDismissSeconds={settings.autoDismissSeconds}
+            onClear={onClearFeatured}
           />
-
-          <div className="flex-1 flex flex-col space-y-4">
-            <div className="flex justify-between items-center">
-              <h2 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 flex items-center gap-2">
-                <Layers size={12} /> OBS Overlay Preview
-              </h2>
-              {state.featuredMessage && (
-                <button
-                  onClick={onClearFeatured}
-                  className="text-[10px] text-red-400 hover:text-red-300 transition-colors uppercase font-bold px-2 py-1 bg-red-400/10 rounded border border-red-500/20"
-                >
-                  Dismiss
-                </button>
-              )}
-            </div>
-
-            <div className={`relative overflow-hidden p-6 rounded-3xl border transition-all flex flex-col justify-center items-center min-h-[220px] text-center ${state.featuredMessage ? 'bg-indigo-600/10 border-indigo-500 shadow-2xl shadow-indigo-500/10' : 'bg-slate-900/50 border-dashed border-slate-800'}`}>
-              {state.featuredMessage ? (
-                <div className="space-y-4 animate-in fade-in zoom-in duration-300 z-10 w-full px-4 flex flex-col items-center">
-                  <div className="relative inline-block">
-                    <img
-                      src={state.featuredMessage.avatarUrl}
-                      className="w-16 h-16 rounded-2xl border-2 border-indigo-500/50 mx-auto object-cover"
-                      alt="Author"
-                    />
-                    <div className={`absolute -bottom-1 -right-1 w-6 h-6 rounded-full border-2 border-slate-950 flex items-center justify-center ${state.featuredMessage.platform === 'twitch' ? 'bg-purple-600' : 'bg-red-600'}`}>
-                      {state.featuredMessage.platform === 'twitch' ? (
-                        <TwitchIcon className="w-2.5 h-2.5 text-white fill-current" />
-                      ) : (
-                        <YouTubeIcon className="w-2.5 h-2.5" />
-                      )}
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    <p className="text-white text-lg font-black leading-tight break-words">"{state.featuredMessage.text}"</p>
-                    <p className="text-indigo-400 text-xs font-bold uppercase tracking-widest">@{state.featuredMessage.author}</p>
-                    {state.featuredMessage.donationAmount && (
-                      <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-500/20 text-emerald-400 rounded-full text-[10px] font-black uppercase tracking-widest border border-emerald-500/30 mt-1">
-                        <Coins size={10} strokeWidth={3} /> {state.featuredMessage.donationAmount}
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Numeric Countdown Display */}
-                  {state.settings.autoDismissEnabled && (
-                    <div className="mt-4 w-full">
-                      <NumericCountdown
-                        duration={state.settings.autoDismissSeconds}
-                        enabled={state.settings.autoDismissEnabled}
-                        featuredAt={state.featuredMessage.featuredAt}
-                      />
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="text-slate-600 space-y-3">
-                  <div className="w-12 h-12 rounded-full border-2 border-slate-800 flex items-center justify-center mx-auto mb-2">
-                    <Layers size={20} className="opacity-40" />
-                  </div>
-                  <p className="text-xs font-medium px-4">Click any message in the feed to push it to your stream overlay.</p>
-                </div>
-              )}
-
-              <div className="absolute inset-0 pointer-events-none opacity-[0.03] bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.25)_50%),linear-gradient(90deg,rgba(255,0,0,0.06),rgba(0,255,0,0.02),rgba(0,0,118,0.06))] bg-[length:100%_2px,3px_100%]"></div>
-            </div>
-          </div>
-        </section>
+          <QueuePanel queue={queuedMessages} onRemove={onToggleQueue} />
+          {hypeTrain?.isActive && <HypeTrainCard data={hypeTrain} />}
+          <PinnedMessagesWidget messages={state.messages} onMessageClick={(id) => scrollToMessage(id, true)} />
+        </aside>
       </main>
     </div>
   );

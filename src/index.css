@@ -5,3 +5,17 @@
     cursor: pointer;
   }
 }
+/* Keyboard key hint, used in the dashboard footer and side panel. */
+.kbd {
+  display: inline-block;
+  min-width: 1.4em;
+  margin-right: 0.25rem;
+  padding: 0 0.3rem;
+  border: 1px solid #334155;
+  border-bottom-width: 2px;
+  border-radius: 0.3rem;
+  background: #1e293b;
+  color: #e2e8f0;
+  font: 700 10px/1.6 "JetBrains Mono", ui-monospace, monospace;
+  text-align: center;
+}

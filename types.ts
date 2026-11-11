@@ -56,6 +56,8 @@ export interface AppSettings {
 export interface AppState {
   messages: ChatMessage[];
   featuredMessage: ChatMessage | null;
+  /** IDs of messages lined up to go on air next, in order. */
+  queue: string[];
   stats: Record<Platform, StreamStats>;
   settings: AppSettings;
   quotaUsage: number;
