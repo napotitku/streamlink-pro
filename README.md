@@ -1,20 +1,17 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# StreamLink Pro
 
-# Run and deploy your AI Studio app
+A dashboard for streamers that merges Twitch and YouTube chat into one feed. Pick a message and it appears on stream through an OBS browser-source overlay. It also shows Twitch subs, gift bombs, raids and the Hype Train.
 
-This contains everything you need to run your app locally.
+## Run locally
 
-View your app in AI Studio: https://ai.studio/apps/drive/1daehrvfuE4eJAHvnQdjs0HxsD9w05kn2
+**Prerequisites:** Node.js 20+
 
-## Run Locally
+1. Install dependencies: `npm install`
+2. Create `.env` with your Firebase web config (`VITE_FIREBASE_*`), `VITE_TWITCH_CLIENT_ID` and `VITE_YOUTUBE_API_KEY`.
+   The Twitch app's OAuth redirect URL must match the origin you run on, for example `http://localhost:3000`.
+3. Run the app: `npm run dev`
+4. Sign in with Google (your UID must be in `allowedUsers` in the Realtime Database), then log in to Twitch from the dashboard.
 
-**Prerequisites:**  Node.js
+## OBS
 
-
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+Click **Overlay link** in the dashboard and add it to OBS as a 1920×1080 browser source.
