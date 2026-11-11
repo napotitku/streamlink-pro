@@ -6,7 +6,8 @@ on:
 
 jobs:
   build_and_deploy:
-    runs-on: ubuntu-latest
+    # Pinned image: ubuntu-latest moves between Ubuntu versions (and queued for us during the 26 rollout).
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
