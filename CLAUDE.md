@@ -6,6 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 StreamLink Pro is a client-only React 19 + React Router 7 + Vite + TypeScript SPA for streamers. It merges Twitch and YouTube live chat into one moderation dashboard, and the streamer can "feature" a message to show it on stream through an OBS browser-source overlay. Firebase provides Google auth, Realtime Database sync between dashboard and overlay, and Hosting. The project started as a Google AI Studio template, which explains the stale README.
 
+## Domains
+
+Production runs at **https://stream.napotitku.cz** (custom domain on Firebase Hosting) and https://streamlink-pro.web.app. Anything tied to the page origin must list all of them plus `http://localhost:3000`: the Twitch app's OAuth Redirect URLs (the redirect URI is `window.location.origin`), Firebase Auth authorized domains, and the YouTube API key's website restriction.
+
 ## Commands
 
 ```bash
