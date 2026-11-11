@@ -3,7 +3,16 @@ import { ExternalLink, LogIn } from 'lucide-react';
 import { StreamStats } from '../types';
 
 export const QUOTA_LIMIT = 10000;
-const DAY = 24 * 3600 * 1000;
+/** useTwitchAuth renews the token this long before it expires. */
+const RENEW_BEFORE_MS = 10 * 60 * 1000;
+
+const formatDuration = (ms: number): string => {
+    const minutes = Math.max(0, Math.round(ms / 60000));
+    if (minutes < 60) return `${minutes} min`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 48) return `${hours} h ${minutes % 60} min`;
+    return `${Math.round(hours / 24)} d`;
+};
 
 type Level = 'ok' | 'warn' | 'error' | 'idle';
 
@@ -49,10 +58,12 @@ const StatusMenu: React.FC<StatusMenuProps> = ({ twitch, youtube, twitchChannel,
         return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey, true); };
     }, [open]);
 
-    const daysLeft = twitch.tokenExpiresAt ? Math.max(0, Math.ceil((twitch.tokenExpiresAt - Date.now()) / DAY)) : null;
+    // Tokens last ~4 h and renew automatically (useTwitchAuth), so a short lifetime is normal.
+    // Only a rejected login needs attention.
+    const renewsIn = twitch.tokenExpiresAt ? twitch.tokenExpiresAt - RENEW_BEFORE_MS - Date.now() : null;
     const twitchConfigured = !!twitchChannel;
     const twitchChat = chatLevel(twitch, twitchConfigured);
-    const loginLevel: Level = twitch.authIssue ? 'error' : !twitchConfigured ? 'idle' : daysLeft !== null && daysLeft <= 7 ? 'warn' : 'ok';
+    const loginLevel: Level = twitch.authIssue ? 'error' : !twitchConfigured ? 'idle' : 'ok';
     const ytChat = chatLevel(youtube, youtubeConfigured);
     const quotaPct = Math.min(100, (quotaUsage / QUOTA_LIMIT) * 100);
     const quotaLevel: Level = quotaPct >= 100 ? 'error' : quotaPct > 80 ? 'warn' : 'ok';
@@ -80,15 +91,15 @@ const StatusMenu: React.FC<StatusMenuProps> = ({ twitch, youtube, twitchChannel,
                         {!twitchConfigured ? 'Not set up' : twitch.status === 'online' ? `#${twitchChannel}` : twitch.status === 'connecting' ? 'Connecting…' : (twitch.errorMessage || 'Offline')}
                     </Row>
                     <Row level={loginLevel} label="Login">
-                        {twitch.authIssue === 'expired' ? 'Expired' : twitch.authIssue === 'scopes' ? 'Needs new permissions' : !twitchConfigured ? '—' : daysLeft !== null ? `Expires in ${daysLeft} d` : 'Connected'}
+                        {twitch.authIssue === 'expired' ? 'Expired' : twitch.authIssue === 'scopes' ? 'Needs new permissions' : !twitchConfigured ? '—' : renewsIn !== null && renewsIn > 0 ? `Auto-renews in ${formatDuration(renewsIn)}` : 'Connected'}
                     </Row>
-                    {(twitch.authIssue || loginLevel === 'warn' || twitch.status === 'error') && (
+                    {(twitch.authIssue || twitch.status === 'error') && (
                         <button
                             type="button"
                             onClick={onTwitchLogin}
                             className="mt-1 mb-2 w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-[#9146FF] hover:bg-[#7a2ce8] text-white text-[11px] font-bold uppercase tracking-wider"
                         >
-                            <LogIn size={12} /> {twitch.authIssue || twitch.status === 'error' ? 'Reconnect Twitch' : 'Renew login'}
+                            <LogIn size={12} /> Reconnect Twitch
                         </button>
                     )}
 
