@@ -131,6 +131,16 @@ export const useMessageStore = (
         });
     }, [broadcastFeatured]);
 
+    /** Swap generated identicons for real profile pictures once they've been looked up. */
+    const updateAvatars = useCallback((avatars: Record<string, string>) => {
+        const patch = (m: ChatMessage) => (m.authorId && avatars[m.authorId] && m.avatarUrl !== avatars[m.authorId] ? { ...m, avatarUrl: avatars[m.authorId] } : m);
+        setState(prev => ({
+            ...prev,
+            featuredMessage: prev.featuredMessage ? patch(prev.featuredMessage) : null,
+            messages: prev.messages.map(patch),
+        }));
+    }, []);
+
     const toggleInteresting = useCallback((id: string) => {
         setState(prev => ({
             ...prev,
@@ -216,6 +226,7 @@ export const useMessageStore = (
         toggleQueued,
         updateStats,
         applyModeration,
+        updateAvatars,
         broadcastFeatured,
     };
 };

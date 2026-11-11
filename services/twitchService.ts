@@ -43,6 +43,8 @@ export interface TwitchClientOptions {
     onHypeTrainUpdate?: (hypeTrain: HypeTrainData | null) => void;
     onStatusChange?: (status: Status, error?: string) => void;
     onModeration?: (event: ModerationEvent) => void;
+    /** Real profile pictures arrived for these user IDs (looked up in batches after the message). */
+    onAvatars?: (avatars: Record<string, string>) => void;
     logDebug?: (category: string, message: string) => void;
 }
 
@@ -72,7 +74,12 @@ export const planLabel = (plan?: string | null): string => {
 };
 
 const randomId = () => Math.random().toString(36).slice(2, 11);
-const avatarFor = (author: string) => `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(author)}`;
+const identicon = (author: string) => `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(author)}`;
+
+/** user ID → profile image URL ('' when the lookup found nothing). Shared across reconnects. */
+const avatarCache = new Map<string, string>();
+const AVATAR_BATCH_DELAY = 400;
+const AVATAR_BATCH_MAX = 100; // Helix /users accepts up to 100 IDs per request
 
 /** Text of a chat message without the "Cheer100" tokens. */
 const messageText = (message: any): string => {
@@ -106,6 +113,8 @@ export class TwitchChatClient {
     private tokenUserId: string | null = null;
     private broadcasterId: string | null = null;
     private hypeTrainAllowed = false;
+    private pendingAvatarIds = new Set<string>();
+    private avatarTimer: ReturnType<typeof setTimeout> | null = null;
 
     constructor(opts: TwitchClientOptions) {
         this.opts = opts;
@@ -128,7 +137,7 @@ export class TwitchChatClient {
 
     disconnect() {
         this.isDisconnecting = true;
-        for (const t of [this.keepaliveTimer, this.reconnectTimer, this.statsTimer, this.validateTimer, this.hypeCheckTimer]) {
+        for (const t of [this.keepaliveTimer, this.reconnectTimer, this.statsTimer, this.validateTimer, this.hypeCheckTimer, this.avatarTimer]) {
             if (t) clearTimeout(t);
         }
         this.ws?.close();
@@ -306,6 +315,47 @@ export class TwitchChatClient {
         // Safety net in case the `end` event is missed: re-check shortly after expiry.
         const wait = Math.max(5_000, expiry.getTime() - Date.now() + 10_000);
         this.hypeCheckTimer = setTimeout(() => this.fetchHypeTrainStatus(), wait);
+    }
+
+    // ── Profile pictures ──────────────────────────────────────────────────────
+
+    /**
+     * Cached profile picture, or a generated identicon while the real one is
+     * looked up. Lookups are batched, and `onAvatars` patches messages already shown.
+     */
+    private avatarFor(userId: string | undefined, name: string): string {
+        if (!userId) return identicon(name);
+        const cached = avatarCache.get(userId);
+        if (cached !== undefined) return cached || identicon(name);
+        if (!this.pendingAvatarIds.has(userId)) {
+            this.pendingAvatarIds.add(userId);
+            if (!this.avatarTimer) this.avatarTimer = setTimeout(() => this.flushAvatars(), AVATAR_BATCH_DELAY);
+        }
+        return identicon(name);
+    }
+
+    private async flushAvatars() {
+        this.avatarTimer = null;
+        if (this.isDisconnecting) return;
+        const ids = [...this.pendingAvatarIds].slice(0, AVATAR_BATCH_MAX);
+        ids.forEach(id => this.pendingAvatarIds.delete(id));
+        if (this.pendingAvatarIds.size) this.avatarTimer = setTimeout(() => this.flushAvatars(), AVATAR_BATCH_DELAY);
+        if (!ids.length) return;
+
+        try {
+            const query = ids.map(id => `id=${encodeURIComponent(id)}`).join('&');
+            const resp = await fetch(`https://api.twitch.tv/helix/users?${query}`, { headers: this.helixHeaders() });
+            if (resp.status === 401) return this.markAuthIssue('expired', '/helix/users (avatars)');
+            if (!resp.ok) return; // try again next time these users chat
+            const users: any[] = (await resp.json()).data ?? [];
+            const found: Record<string, string> = {};
+            for (const u of users) {
+                if (u.profile_image_url) found[u.id] = u.profile_image_url;
+            }
+            // Remember misses too, so deleted/unknown users aren't looked up again.
+            for (const id of ids) avatarCache.set(id, found[id] ?? '');
+            if (Object.keys(found).length && !this.isDisconnecting) this.opts.onAvatars?.(found);
+        } catch { /* network error — try again next time */ }
     }
 
     // ── EventSub WebSocket ────────────────────────────────────────────────────
@@ -489,7 +539,7 @@ export class TwitchChatClient {
             isFeatured: false,
             // EventSub has no "first message ever" flag; `user_intro` is the first-time-chatter intro.
             isFirstMessage: e.message_type === 'user_intro',
-            avatarUrl: avatarFor(author),
+            avatarUrl: this.avatarFor(e.chatter_user_id, author),
             authorColor: e.color || '#9146FF',
             donationAmount: bits ? `${bits} Bits` : undefined,
         });
@@ -549,7 +599,7 @@ export class TwitchChatClient {
                     timestamp: new Date(),
                     isRead: false,
                     isFeatured: false,
-                    avatarUrl: data.profile_image_url || avatarFor(raider),
+                    avatarUrl: data.profile_image_url || this.avatarFor(data.user_id, raider),
                     authorColor: '#9146FF',
                 });
             }
@@ -572,7 +622,8 @@ export class TwitchChatClient {
             timestamp: new Date(),
             isRead: false,
             isFeatured: false,
-            avatarUrl: avatarFor(base.author),
+            // Anonymous gifts have no real user to look up.
+            avatarUrl: base.author === 'Anonymous' ? identicon(base.author) : this.avatarFor(base.authorId, base.author),
             authorColor: base.color || '#9146FF',
             subscription,
         });

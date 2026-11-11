@@ -32,7 +32,8 @@ const App: React.FC = () => {
     toggleInteresting,
     toggleQueued,
     updateStats,
-    applyModeration
+    applyModeration,
+    updateAvatars
   } = useMessageStore(settings, { restoreFeatured: !isOverlay });
 
   const { twitchClient, youtubeClient, hypeTrain, simulateHypeTrain } = useChatConnection({
@@ -43,7 +44,8 @@ const App: React.FC = () => {
     // Only mark auth ready for writes when the user is actually authorized (or it's the overlay)
     authReady: authReady && (isOverlay || isAuthorized),
     readOnly: isOverlay,
-    onModeration: applyModeration
+    onModeration: applyModeration,
+    onAvatars: updateAvatars
   });
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);

@@ -94,7 +94,7 @@ const StatusMenu: React.FC<StatusMenuProps> = ({ twitch, youtube, twitchChannel,
 
                     <div className="text-[10px] font-black uppercase tracking-[0.15em] text-slate-500 mt-3 mb-1">YouTube</div>
                     <Row level={ytChat} label="Chat">
-                        {!youtubeConfigured ? 'No stream set' : youtube.status === 'online' ? 'Polling' : youtube.status === 'connecting' ? 'Connecting…' : (youtube.errorMessage || 'Offline')}
+                        {!youtubeConfigured ? 'No stream set' : youtube.status === 'online' ? 'Polling' : youtube.status === 'connecting' ? (youtube.errorMessage || 'Connecting…') : (youtube.errorMessage || 'Offline')}
                     </Row>
                     <Row level={quotaLevel} label="API quota">
                         {quotaUsage.toLocaleString()} / {QUOTA_LIMIT.toLocaleString()}

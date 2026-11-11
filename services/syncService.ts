@@ -6,7 +6,7 @@
  * in presentation components or hooks — route everything through here.
  */
 
-import { ref, set, get, onValue, push } from 'firebase/database';
+import { ref, set, get, onValue } from 'firebase/database';
 import { db } from '@/src/firebase';
 import { ChatMessage, HypeTrainData } from '@/types';
 
@@ -22,6 +22,14 @@ export interface FeaturedMessagePayload {
 }
 
 type Unsubscribe = () => void;
+
+/** Debug logs overwrite a fixed set of slots, so the node never grows past this many entries. */
+const LOG_SLOTS = 50;
+const LOG_SLOT_KEY = 'streamlink_debug_log_slot';
+let nextLogSlot = (() => {
+    try { return (Number(localStorage.getItem(LOG_SLOT_KEY)) || 0) % LOG_SLOTS; } catch { return 0; }
+})();
+
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -98,9 +106,16 @@ export const syncService = {
 
     // ─── Debug logging ────────────────────────────────────────────────────────
 
-    /** Writes a structured log entry to `debug_logs/hype_train`. */
+    /**
+     * Writes a structured log entry to `debug_logs/hype_train` (Twitch connection, auth
+     * and Hype Train events). Entries go into a ring of LOG_SLOTS slots, oldest overwritten
+     * first; sort by `timestamp` when reading them in the Firebase console.
+     */
     logHypeTrainEvent(category: string, message: string, readOnly: boolean): Promise<void> {
-        const logRef = push(ref(db, 'debug_logs/hype_train'));
+        const slot = nextLogSlot;
+        nextLogSlot = (nextLogSlot + 1) % LOG_SLOTS;
+        try { localStorage.setItem(LOG_SLOT_KEY, String(nextLogSlot)); } catch { /* storage blocked */ }
+        const logRef = ref(db, `debug_logs/hype_train/slot_${String(slot).padStart(2, '0')}`);
         return set(logRef, sanitize({
             timestamp: new Date().toISOString(),
             category,

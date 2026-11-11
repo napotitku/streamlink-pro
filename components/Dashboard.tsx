@@ -40,7 +40,7 @@ const formatClock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(s
 
 const ViewerPill: React.FC<{ platform: 'twitch' | 'youtube'; stats: StreamStats; configured: boolean }> = ({ platform, stats, configured }) => {
   const isTwitch = platform === 'twitch';
-  const live = isTwitch ? !!stats.isLive : stats.status === 'online';
+  const live = isTwitch ? !!stats.isLive : (stats.isLive ?? stats.status === 'online');
   const unknown = !configured || !!stats.authIssue || (isTwitch ? stats.status === 'error' && !stats.isLive : stats.status !== 'online');
   return (
     <div className="flex items-center gap-2.5 pl-2.5 pr-3 py-1.5 rounded-xl border border-slate-800 bg-slate-950" title={stats.title || undefined}>

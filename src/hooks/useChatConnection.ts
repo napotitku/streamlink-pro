@@ -13,9 +13,11 @@ interface UseChatConnectionProps {
     authReady?: boolean;
     /** A Twitch moderator deleted a message or cleared a user's messages. */
     onModeration?: (event: ModerationEvent) => void;
+    /** Real Twitch profile pictures, keyed by user ID. */
+    onAvatars?: (avatars: Record<string, string>) => void;
 }
 
-export const useChatConnection = ({ settings, addMessage, updateStats, incrementQuota, readOnly = false, authReady = false, onModeration }: UseChatConnectionProps) => {
+export const useChatConnection = ({ settings, addMessage, updateStats, incrementQuota, readOnly = false, authReady = false, onModeration, onAvatars }: UseChatConnectionProps) => {
     const twitchClient = useRef<TwitchChatClient | null>(null);
     const youtubeClient = useRef<YouTubeChatClient | null>(null);
     const [hypeTrain, setHypeTrain] = useState<HypeTrainData | null>(null);
@@ -33,6 +35,8 @@ export const useChatConnection = ({ settings, addMessage, updateStats, increment
     live.current = { authReady, readOnly, showHypeTrain: settings.showHypeTrain, showSubscriptions: settings.showSubscriptions };
     const onModerationRef = useRef(onModeration);
     onModerationRef.current = onModeration;
+    const onAvatarsRef = useRef(onAvatars);
+    onAvatarsRef.current = onAvatars;
 
     useEffect(() => {
         // Cleanup previous connections
@@ -47,7 +51,9 @@ export const useChatConnection = ({ settings, addMessage, updateStats, increment
         updateStats('twitch', settings.twitchChannel
             ? { status: 'connecting', errorMessage: undefined, authIssue: undefined, tokenExpiresAt: undefined }
             : { viewers: 0, status: 'offline', title: 'Not connected', isLive: false, errorMessage: undefined, authIssue: undefined, tokenExpiresAt: undefined });
-        updateStats('youtube', (settings.youtubeApiKey && settings.youtubeVideoId) ? { status: 'connecting' } : { viewers: 0, status: 'offline', title: 'Not connected' });
+        updateStats('youtube', (settings.youtubeApiKey && settings.youtubeVideoId)
+            ? { status: 'connecting', errorMessage: undefined, isLive: undefined }
+            : { viewers: 0, status: 'offline', title: 'Not connected', errorMessage: undefined, isLive: undefined });
 
         // Twitch Connection (EventSub — needs the user's own Twitch login)
         if (settings.twitchChannel) {
@@ -68,6 +74,7 @@ export const useChatConnection = ({ settings, addMessage, updateStats, increment
                 },
                 onStatusChange: (status, error) => updateStats('twitch', { status, errorMessage: error }),
                 onModeration: (event) => onModerationRef.current?.(event),
+                onAvatars: (avatars) => onAvatarsRef.current?.(avatars),
                 logDebug: (category, message) => {
                     if (!live.current.authReady) return;
                     syncService.logHypeTrainEvent(category, message, false);
