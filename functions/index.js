@@ -59,7 +59,9 @@ const handle = (fn) => async (request) => {
     }
 };
 
-const options = { secrets: [TWITCH_CLIENT_SECRET] };
+// `invoker: 'public'` lets browsers reach the endpoints at all (callable functions must be
+// publicly invocable); who may actually use them is checked in requireAllowedUser().
+const options = { invoker: 'public', secrets: [TWITCH_CLIENT_SECRET] };
 
 export const twitchExchangeCode = onCall(options, handle((data, uid) => exchangeCode({
     code: data.code,
@@ -75,7 +77,7 @@ export const twitchRefreshToken = onCall(options, handle((_data, uid) => refresh
     store: storeFor(uid),
 })));
 
-export const twitchLogout = onCall(handle((data, uid) => forgetLogin({
+export const twitchLogout = onCall({ invoker: 'public' }, handle((data, uid) => forgetLogin({
     clientId: TWITCH_CLIENT_ID.value(),
     accessToken: data.accessToken,
     store: storeFor(uid),
