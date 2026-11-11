@@ -18,7 +18,7 @@ npx tsc --noEmit     # typecheck (tsconfig has noEmit; there is no separate lint
 
 There is no test suite. To verify changes, typecheck, then run the app and use the simulators in the Settings modal: test messages, donation, subscription and Hype Train.
 
-Deploys run from `.github/workflows/deploy.yml` on push to `main`: `npm ci`, typecheck, `npm run build` with `VITE_*` secrets, then a pinned `firebase-tools` deploys hosting and, as a separate step, `database.rules.json`.
+Deploys run from `.github/workflows/deploy.yml` on push to `main`: `npm ci`, typecheck, `npm run build` with `VITE_*` secrets, then `w9jds/firebase-action` (pinned to a commit SHA) deploys hosting and, as a separate step, `database.rules.json`.
 
 ## Environment
 

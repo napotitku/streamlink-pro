@@ -42,12 +42,16 @@ jobs:
           VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID }}
           VITE_FIREBASE_MEASUREMENT_ID: ${{ secrets.VITE_FIREBASE_MEASUREMENT_ID }}
 
-      # Pinned firebase-tools version instead of an unpinned third-party action.
-      # Uses the credentials from the auth step (GOOGLE_APPLICATION_CREDENTIALS).
+      # Same deploy action as before, but pinned to a commit (firebase-tools v15.34.1)
+      # instead of @master, so upstream changes can't run with our service-account key.
       - name: Deploy Hosting
-        run: npx --yes firebase-tools@15.34.1 deploy --only hosting --non-interactive
+        uses: w9jds/firebase-action@a3f8db378f69597e99644eb9c8dfefe0bcce6e1d
+        with:
+          args: deploy --only hosting
 
       # Database rules deploy separately, so a permissions problem here can't block a hosting release.
       # The service account needs the "Firebase Realtime Database Admin" role.
       - name: Deploy Database Rules
-        run: npx --yes firebase-tools@15.34.1 deploy --only database --non-interactive
+        uses: w9jds/firebase-action@a3f8db378f69597e99644eb9c8dfefe0bcce6e1d
+        with:
+          args: deploy --only database
