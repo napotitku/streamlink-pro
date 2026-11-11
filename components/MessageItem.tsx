@@ -1,8 +1,14 @@
 
 import React from 'react';
-import { ChatMessage } from '../types';
-import { CheckCircle, Send, MessageSquareDashed, Sparkles, Bookmark, Trash2, XCircle, Coins } from 'lucide-react';
+import { ChatMessage, SubscriptionData } from '../types';
+import { CheckCircle, Send, MessageSquareDashed, Sparkles, Bookmark, Trash2, XCircle, Coins, Gift } from 'lucide-react';
 import { TwitchIcon, YouTubeIcon } from '@/components/icons/PlatformIcons';
+
+export const subscriptionLabel = (sub: SubscriptionData): string => {
+  if (sub.isGift) return (sub.giftCount ?? 1) > 1 ? `Gift ×${sub.giftCount}` : 'Gift sub';
+  if (sub.months && sub.months > 1) return `Resub · ${sub.months} mo`;
+  return 'New sub';
+};
 
 interface MessageItemProps {
   message: ChatMessage;
@@ -45,7 +51,9 @@ const MessageItem: React.FC<MessageItemProps> = ({ message, onFeature, onMarkRea
             ? 'bg-slate-900/40 border-slate-800/40 opacity-50'
             : message.isInteresting
               ? 'bg-amber-500/10 border-amber-500/30 hover:bg-amber-500/20'
-              : 'bg-slate-800/80 border-slate-700/50 hover:bg-slate-800 hover:border-slate-500'
+              : message.eventType === 'subscription'
+                ? 'bg-purple-500/10 border-purple-500/30 hover:bg-purple-500/20 hover:border-purple-400/50'
+                : 'bg-slate-800/80 border-slate-700/50 hover:bg-slate-800 hover:border-slate-500'
           }`}
       >
         <div className="flex items-start gap-4">
@@ -100,6 +108,12 @@ const MessageItem: React.FC<MessageItemProps> = ({ message, onFeature, onMarkRea
               {message.donationAmount && (
                 <span className="flex items-center gap-0.5 text-[8px] font-black bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded uppercase tracking-widest shadow-sm border border-emerald-500/30">
                   <Coins size={8} strokeWidth={3} /> {message.donationAmount}
+                </span>
+              )}
+
+              {message.eventType === 'subscription' && message.subscription && (
+                <span className="flex items-center gap-0.5 text-[8px] font-black bg-purple-500/20 text-purple-300 px-1.5 py-0.5 rounded uppercase tracking-widest shadow-sm border border-purple-500/30">
+                  <Gift size={8} strokeWidth={3} /> {subscriptionLabel(message.subscription)}
                 </span>
               )}
 

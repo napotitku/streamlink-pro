@@ -29,6 +29,10 @@ export interface StreamStats {
   errorMessage?: string;
   /** True when the Helix streams endpoint confirms an active broadcast. Distinct from `status === 'online'` which only means the IRC/API connection is up. */
   isLive?: boolean;
+  /** True when Twitch rejected the stored token. Chat may still work; viewer count and Hype Train don't. */
+  authExpired?: boolean;
+  /** Epoch ms when the current token expires, from Twitch's /validate endpoint. */
+  tokenExpiresAt?: number;
 }
 
 export interface AppSettings {
@@ -59,8 +63,11 @@ export interface SubscriptionData {
   plan?: string;
   months?: number;
   isGift?: boolean;
-  gifter?: string;
+  gifter?: string | null;
   streak?: number;
+  /** Number of subs in a gift; > 1 for a community gift bomb. */
+  giftCount?: number;
+  recipient?: string;
 }
 
 export interface HypeTrainData {

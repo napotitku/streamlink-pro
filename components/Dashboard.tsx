@@ -121,13 +121,32 @@ const StatusIndicator: React.FC<{
       ) : (
         <div className="mt-auto flex flex-col">
           <span className={`font-mono font-bold text-xl ${isLive ? 'text-white' : 'text-slate-500'}`}>
-            {stats.viewers.toLocaleString()}
+            {stats.authExpired ? '—' : stats.viewers.toLocaleString()}
           </span>
           <span className={`text-[9px] font-bold uppercase tracking-widest ${
             isLive ? 'text-red-400' : isOnline ? 'text-emerald-500' : isConnecting ? 'text-indigo-400' : 'text-slate-600'
           }`}>
-            {isConnecting ? 'connecting' : isLive ? 'live' : isOnline ? 'connected' : 'offline'}
+            {isConnecting ? 'connecting' : isLive ? 'live' : isOnline ? 'chat connected' : 'offline'}
           </span>
+          {stats.authExpired ? (
+            <>
+              <span className="text-amber-400 text-[9px] leading-tight font-black uppercase tracking-wider mt-1" title="Twitch rejected the saved login. Chat still works, but the viewer count and Hype Train need a fresh login.">
+                Login expired
+              </span>
+              {onReconnect && (
+                <button
+                  onClick={onReconnect}
+                  className="mt-2 flex items-center justify-center gap-1.5 px-2 py-1.5 bg-[#9146FF] hover:bg-[#7a2ce8] text-white rounded text-[9px] font-bold uppercase tracking-wider transition-all shadow-lg active:scale-95 w-full"
+                >
+                  <LogIn size={10} /> Reconnect
+                </button>
+              )}
+            </>
+          ) : stats.tokenExpiresAt && stats.tokenExpiresAt - Date.now() < 7 * 24 * 3600 * 1000 ? (
+            <span className="text-amber-400/80 text-[9px] font-bold uppercase tracking-wider mt-1" title="Log in to Twitch again before then to keep the viewer count working.">
+              Login expires in {Math.max(0, Math.ceil((stats.tokenExpiresAt - Date.now()) / (24 * 3600 * 1000)))} d
+            </span>
+          ) : null}
         </div>
       )}
     </div>
@@ -378,7 +397,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                 platform="Twitch"
                 stats={state.stats.twitch}
                 icon={<TwitchIcon className="w-3 h-3 text-purple-400 fill-current" />}
-                onReconnect={(state.stats.twitch.status === 'error' || state.stats.twitch.status === 'offline') ? onTwitchLogin : undefined}
+                onReconnect={(state.stats.twitch.status === 'error' || state.stats.twitch.status === 'offline' || state.stats.twitch.authExpired) ? onTwitchLogin : undefined}
               />
               <StatusIndicator
                 platform="YouTube"

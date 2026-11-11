@@ -224,7 +224,9 @@ const Overlay: React.FC<OverlayProps> = ({ featuredMessage: initialMessage, hype
               {isSubscription && activeMsg?.subscription && (
                 <span className="ml-auto flex items-center gap-2 px-4 py-1.5 rounded-full bg-black/20 border border-white/10 text-white font-black text-xl tracking-widest shadow-lg">
                   <Gift className="w-6 h-6 text-yellow-400" />
-                  {activeMsg.subscription.months && activeMsg.subscription.months > 1 ? `${activeMsg.subscription.months} MONTHS` : 'SUBSCRIBER'}
+                  {activeMsg.subscription.isGift
+                    ? ((activeMsg.subscription.giftCount ?? 1) > 1 ? `${activeMsg.subscription.giftCount} GIFTED SUBS` : 'GIFTED SUB')
+                    : activeMsg.subscription.months && activeMsg.subscription.months > 1 ? `${activeMsg.subscription.months} MONTHS` : 'SUBSCRIBER'}
                 </span>
               )}
             </div>

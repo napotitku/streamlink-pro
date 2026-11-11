@@ -213,7 +213,7 @@ const App: React.FC = () => {
     const msg: ChatMessage = {
       id: Math.random().toString(36).substring(7),
       author: isGift ? "KindGiffter_88" : "NewSubscriber_01",
-      text: isGift ? "Just gifted a sub to RandomUser!" : "Just subscribed! Love the content!",
+      text: isGift ? "KindGiffter_88 gifted 5 Tier 1 subs to the community!" : "Just subscribed! Love the content!",
       platform: 'twitch',
       timestamp: new Date(),
       isRead: false,
@@ -225,7 +225,8 @@ const App: React.FC = () => {
         plan,
         months,
         isGift,
-        gifter: isGift ? "KindGiffter_88" : null
+        gifter: isGift ? "KindGiffter_88" : null,
+        giftCount: isGift ? 5 : undefined
       }
     };
     addMessage(msg);
