@@ -6,7 +6,7 @@
  * in presentation components or hooks — route everything through here.
  */
 
-import { ref, set, get, onValue } from 'firebase/database';
+import { ref, set, get, onValue, push } from 'firebase/database';
 import { db } from '@/src/firebase';
 import { ChatMessage, HypeTrainData } from '@/types';
 
@@ -100,7 +100,7 @@ export const syncService = {
 
     /** Writes a structured log entry to `debug_logs/hype_train`. */
     logHypeTrainEvent(category: string, message: string, readOnly: boolean): Promise<void> {
-        const logRef = ref(db, `debug_logs/hype_train/${Date.now()}`);
+        const logRef = push(ref(db, 'debug_logs/hype_train'));
         return set(logRef, sanitize({
             timestamp: new Date().toISOString(),
             category,

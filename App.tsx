@@ -17,7 +17,7 @@ import { validateTwitchToken } from '@/services/twitchService';
 const App: React.FC = () => {
   const location = useLocation();
   const { settings, setSettings, quotaUsage, setQuotaUsage, incrementQuota } = useAppSettings();
-  const { user, authReady, isAuthorized, signIn, signOut } = useFirebaseAuth();
+  const { user, authReady, isAuthorized, isSigningIn, signIn, signOut } = useFirebaseAuth();
 
   const isOverlay = location.pathname.includes('/overlay');
 
@@ -220,7 +220,7 @@ const App: React.FC = () => {
         <div className="h-screen w-full bg-slate-950" />
       )}
       {!isOverlay && authReady && (!user || !isAuthorized) && (
-        <LoginPage onSignIn={signIn} user={user} isLoading={false} />
+        <LoginPage onSignIn={signIn} user={user} isLoading={isSigningIn} />
       )}
       {/* Main app — rendered when authorized or on the overlay route */}
       {(isOverlay || (authReady && isAuthorized)) && (
