@@ -86,7 +86,10 @@ export function useTwitchAuth({ enabled, settings, setSettings, authIssue, token
         setBusy(true);
         exchangeTwitchCode(result.code)
             .then(session => { applySession(session, true); setError(null); })
-            .catch(err => setError((err as Error).message || 'Twitch login failed. Try again.'))
+            .catch(err => {
+                console.error('[TwitchAuth] Twitch login failed:', err);
+                setError((err as Error).message || 'Twitch login failed. Try again.');
+            })
             .finally(() => setBusy(false));
     }, [enabled, applySession]);
 
