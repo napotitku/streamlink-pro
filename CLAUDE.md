@@ -14,9 +14,12 @@ npm run dev          # Vite dev server on http://0.0.0.0:3000
 npm run build        # production build to dist/
 npm run preview      # serve the built dist/
 npx tsc --noEmit     # typecheck (tsconfig has noEmit; there is no separate lint script)
+
+cd functions && npm install && npm test        # Cloud Functions: unit tests for the Twitch token logic
+firebase deploy --only functions               # deploy functions (not done by CI)
 ```
 
-There is no test suite. To verify changes, typecheck, then run the app and use the simulators in the Settings modal: test messages, donation, subscription and Hype Train.
+The web app has no test suite (only `functions/` has tests). To verify web changes, typecheck, then run the app and use the simulators in the Settings modal: test messages, donation, subscription and Hype Train.
 
 Deploys run from `.github/workflows/deploy.yml` on push to `main`: `npm ci`, typecheck, `npm run build` with `VITE_*` secrets, then `w9jds/firebase-action` (pinned to a commit SHA) deploys hosting and, as a separate step, `database.rules.json`.
 
@@ -24,7 +27,12 @@ Deploys run from `.github/workflows/deploy.yml` on push to `main`: `npm ci`, typ
 
 All config comes from `VITE_*` variables in `.env` (gitignored): `VITE_FIREBASE_*`, `VITE_TWITCH_CLIENT_ID`, `VITE_YOUTUBE_API_KEY`, and optionally `VITE_TWITCH_CHANNEL`. Every value is bundled into the public client, so never add a user token as a `VITE_` variable. There is no backend.
 
-The Twitch token comes only from the user's own login (`src/twitchAuth.ts`: implicit grant with a `state` check). It is kept in sessionStorage, so it survives reloads but not closing the browser. Scopes: `user:read:chat` and `channel:read:hype_train`. Logins from before the EventSub switch lack `user:read:chat`; the client reports `authIssue: 'scopes'` and the UI asks for a reconnect.
+**Twitch login** uses the OAuth Authorization Code flow with a Cloud Function holding the secret:
+- `src/twitchAuth.ts` redirects to Twitch (`response_type=code`, random `state`, redirect URI = `window.location.origin`, which must be registered in the Twitch app). Twitch returns to `/?code=…&state=…`; HashRouter sees `/`.
+- `src/hooks/useTwitchAuth.ts` (called in `App`) reads that redirect once per page load, waits for the Google user to be allowlisted, and calls the `twitchExchangeCode` function. It also restores a token after a browser restart (`twitchRefreshToken`), renews 10 min before expiry, and retries once on a 401.
+- `functions/index.js` (region `europe-west1`, same as the RTDB) stores each user's refresh token at `twitchAuth/{uid}` (rules deny all client access). The client secret is in Secret Manager (`firebase functions:secrets:set TWITCH_CLIENT_SECRET`); the public client ID is in `functions/.env.streamlink-pro`.
+- The access token (~4 h) lives in sessionStorage. A refreshed token for the same account is swapped into the running `TwitchChatClient` with `updateToken()` (no reconnect); a different account recreates the client.
+- Scopes: `user:read:chat`, `channel:read:hype_train`. Tokens without `user:read:chat` get `authIssue: 'scopes'` and the UI asks for a new login.
 
 ## Architecture
 
@@ -38,7 +46,7 @@ The Twitch token comes only from the user's own login (`src/twitchAuth.ts`: impl
 **State layers:**
 - `src/contexts/AppSettingsContext.tsx` holds user settings and the daily YouTube API quota counter. The counter resets at midnight Pacific time, which is when YouTube resets quota. Settings persist to `localStorage` (`streamlink_settings`), but credentials (`twitchAccessToken`, `twitchClientId`, `youtubeApiKey`) and `youtubeVideoId` are deliberately removed before saving. Env vars fill the credentials back in on every load.
 - `src/hooks/useMessageStore.ts` keeps the in-memory message list (capped at 200, newest first), the on-air (`featuredMessage`) message and the "Up next" `queue` of message IDs. Actions read current state through `stateRef` and call `broadcastFeatured` **outside** `setState` updaters (updaters must stay side-effect free). `broadcastFeatured` writes Firebase `currentComment` and posts to `BroadcastChannel('streamlink_sync')` for other dashboard tabs. On dashboard load, the store restores whatever is still on air from Firebase instead of clearing it. `App.tsx` auto-advances the queue when nothing is on air.
-- `src/hooks/useChatConnection.ts` creates and recreates `TwitchChatClient` and `YouTubeChatClient` when connection settings change (never in `readOnly` mode). The clients' callbacks outlive renders, so they read `authReady`, `readOnly` and the toggles through the `live` ref; don't capture those values directly. It also owns Hype Train state, which it subscribes to from Firebase `hypeTrain`.
+- `src/hooks/useChatConnection.ts` creates and recreates `TwitchChatClient` and `YouTubeChatClient` in separate effects when their settings change (never in `readOnly` mode). The clients' callbacks outlive renders, so they read `authReady`, `readOnly` and the toggles through the `live` ref; don't capture those values directly. It also owns Hype Train state, which it subscribes to from Firebase `hypeTrain`.
 
 **Services (`services/`):**
 - `syncService.ts` is the **only** module that should touch Firebase Realtime Database for app data (`currentComment`, `hypeTrain`, `debug_logs/hype_train`). Don't import `firebase/database` in components or hooks. The one exception is the allowlist read in `useFirebaseAuth`. `sanitize()` exists because RTDB rejects `undefined`. It also turns `Date` into an ISO string, so readers have to rebuild `Date` objects (the Overlay does this).

@@ -11,7 +11,7 @@ import { useMessageStore } from '@/src/hooks/useMessageStore';
 import { useChatConnection } from '@/src/hooks/useChatConnection';
 import { useFirebaseAuth } from '@/src/hooks/useFirebaseAuth';
 import AuthHandler from './components/AuthHandler';
-import { startTwitchLogin } from '@/src/twitchAuth';
+import { useTwitchAuth } from '@/src/hooks/useTwitchAuth';
 import { validateTwitchToken } from '@/services/twitchService';
 
 const App: React.FC = () => {
@@ -209,11 +209,14 @@ const App: React.FC = () => {
     quotaUsage
   };
 
-  const handleTwitchLogin = useCallback(() => {
-    if (!startTwitchLogin(settings.twitchClientId)) {
-      alert("Missing Twitch Client ID. Set VITE_TWITCH_CLIENT_ID in .env first.");
-    }
-  }, [settings.twitchClientId]);
+  const twitchAuth = useTwitchAuth({
+    enabled: !isOverlay && authReady && isAuthorized,
+    settings,
+    setSettings,
+    authIssue: messageState.stats.twitch.authIssue,
+    tokenExpiresAt: messageState.stats.twitch.tokenExpiresAt,
+  });
+  const handleTwitchLogin = twitchAuth.login;
 
   return (
     <>
@@ -255,6 +258,20 @@ const App: React.FC = () => {
         {/* Catch-all for Twitch OAuth redirect which HashRouter sees as a path starting with access_token */}
         <Route path="*" element={<AuthHandler />} />
       </Routes>
+
+      {!isOverlay && (twitchAuth.busy || twitchAuth.error) && (
+        <div role="status" className="fixed top-3 left-1/2 -translate-x-1/2 z-[70] max-w-[min(90vw,560px)] flex items-start gap-3 px-4 py-3 rounded-xl border shadow-2xl text-sm bg-slate-900 border-slate-700 text-slate-100">
+          {twitchAuth.busy ? (
+            <span>Connecting to Twitch…</span>
+          ) : (
+            <>
+              <span className="text-red-300 font-semibold shrink-0">Twitch login failed.</span>
+              <span className="text-slate-300">{twitchAuth.error}</span>
+              <button type="button" onClick={twitchAuth.dismissError} className="ml-auto shrink-0 text-slate-400 hover:text-white font-bold" aria-label="Dismiss">✕</button>
+            </>
+          )}
+        </div>
+      )}
 
       {showLaunchPrompt && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-300">
@@ -329,6 +346,7 @@ const App: React.FC = () => {
             setIsSettingsOpen(false);
           }}
           onClose={() => setIsSettingsOpen(false)}
+          onTwitchLogout={twitchAuth.logout}
           onSimulateDonation={simulateDonation}
           onSimulateHypeTrain={handleSimulateHypeTrain}
           onSimulateSubscription={simulateSubscription}

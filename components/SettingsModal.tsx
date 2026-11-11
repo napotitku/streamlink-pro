@@ -10,6 +10,8 @@ interface SettingsModalProps {
   onTriggerTest: () => void;
   onSave: (settings: AppSettings, manualQuota?: number) => void;
   onClose: () => void;
+  /** Logs out of Twitch, including the login saved on the server. */
+  onTwitchLogout?: () => void;
   onSimulateDonation?: (amount: string, color: string, duration: number) => void;
   onSimulateHypeTrain?: () => void;
   onSimulateSubscription?: (plan: string, months: number, isGift: boolean) => void;
@@ -17,7 +19,7 @@ interface SettingsModalProps {
 
 type Tab = 'stream' | 'interaction' | 'dev';
 
-const SettingsModal: React.FC<SettingsModalProps> = ({ settings, currentQuota, onTriggerTest, onSave, onClose, onSimulateDonation, onSimulateHypeTrain, onSimulateSubscription }) => {
+const SettingsModal: React.FC<SettingsModalProps> = ({ settings, currentQuota, onTriggerTest, onSave, onClose, onTwitchLogout, onSimulateDonation, onSimulateHypeTrain, onSimulateSubscription }) => {
   const [formData, setFormData] = useState<AppSettings>(settings);
   const [manualQuota, setManualQuota] = useState<number>(currentQuota);
   const [activeTab, setActiveTab] = useState<Tab>('stream');
@@ -103,7 +105,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, currentQuota, o
                     </div>
                     {formData.twitchAccessToken ? (
                       <button
-                        onClick={() => setFormData({ ...formData, twitchAccessToken: '', twitchChannel: '' })}
+                        onClick={() => { onTwitchLogout?.(); setFormData({ ...formData, twitchAccessToken: '', twitchChannel: '' }); }}
                         className="flex items-center gap-1.5 px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-500 border border-red-500/20 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all"
                         title="Log out and clear stored token"
                       >

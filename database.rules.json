@@ -25,6 +25,10 @@
                     ".validate": "newData.hasChildren(['timestamp'])"
                 }
             }
+        },
+        "twitchAuth": {
+            ".read": false,
+            ".write": false
         }
     }
 }

@@ -145,6 +145,32 @@ export class TwitchChatClient {
         this.ws = this.pendingWs = null;
     }
 
+    /**
+     * Swaps in a refreshed access token for the same Twitch account without
+     * reconnecting. EventSub subscriptions stay bound to the open socket; only
+     * Helix calls (viewer count, avatars, Hype Train status) use the new token.
+     * Returns false when the client must be recreated instead (different
+     * account, missing chat scope, or the client already stopped).
+     */
+    async updateToken(token: string): Promise<boolean> {
+        const clean = token.trim().replace(/^oauth:/i, '');
+        if (!clean) return false;
+        if (clean === this.token) return true;
+        if (this.isDisconnecting || !this.tokenUserId || !this.ws) return false;
+
+        let info: TwitchTokenInfo | null;
+        try {
+            info = await validateTwitchToken(clean);
+        } catch {
+            return false;
+        }
+        if (this.isDisconnecting || !info || info.user_id !== this.tokenUserId || !info.scopes.includes('user:read:chat')) return false;
+
+        this.token = clean;
+        this.reportTokenExpiry(info);
+        return true;
+    }
+
     private status(status: Status, error?: string) {
         if (!this.isDisconnecting) this.opts.onStatusChange?.(status, error);
     }

@@ -38,84 +38,104 @@ export const useChatConnection = ({ settings, addMessage, updateStats, increment
     const onAvatarsRef = useRef(onAvatars);
     onAvatarsRef.current = onAvatars;
 
-    useEffect(() => {
-        // Cleanup previous connections
-        if (twitchClient.current) twitchClient.current.disconnect();
-        if (youtubeClient.current) youtubeClient.current.disconnect();
+    // Bumped to force a fresh Twitch client (new login, logout, or a token the
+    // running client can't take over in place).
+    const [twitchGeneration, setTwitchGeneration] = useState(0);
+    /** The token the current Twitch client is using. */
+    const activeTwitchToken = useRef<string>('');
+    const tokenRef = useRef(settings.twitchAccessToken);
+    tokenRef.current = settings.twitchAccessToken;
 
+    // ── Twitch (EventSub — needs the user's own Twitch login) ────────────────
+    useEffect(() => {
         // The overlay (OBS) only reads `currentComment` and `hypeTrain` from Firebase.
         // It has no login and must not open chat connections of its own.
         if (readOnly) return;
 
-        // Reset stats
         updateStats('twitch', settings.twitchChannel
             ? { status: 'connecting', errorMessage: undefined, authIssue: undefined, tokenExpiresAt: undefined }
             : { viewers: 0, status: 'offline', title: 'Not connected', isLive: false, errorMessage: undefined, authIssue: undefined, tokenExpiresAt: undefined });
-        updateStats('youtube', (settings.youtubeApiKey && settings.youtubeVideoId)
-            ? { status: 'connecting', errorMessage: undefined, isLive: undefined }
-            : { viewers: 0, status: 'offline', title: 'Not connected', errorMessage: undefined, isLive: undefined });
+        if (!settings.twitchChannel) return;
 
-        // Twitch Connection (EventSub — needs the user's own Twitch login)
-        if (settings.twitchChannel) {
-            twitchClient.current = new TwitchChatClient({
-                channel: settings.twitchChannel,
-                accessToken: settings.twitchAccessToken,
-                clientId: settings.twitchClientId,
-                onMessage: (msg) => {
-                    if (msg.eventType === 'subscription' && !live.current.showSubscriptions) return;
-                    addMessage(msg);
-                },
-                onStatsUpdate: (stats) => updateStats('twitch', stats),
-                onHypeTrainUpdate: (hypeTrainData) => {
-                    if (!live.current.showHypeTrain) return;
-                    // While a simulation runs, only a real active train may replace it.
-                    if (hypeTrainRef.current?.isTest && hypeTrainRef.current?.isActive && !hypeTrainData) return;
-                    if (live.current.authReady) syncService.setHypeTrain(hypeTrainData);
-                },
-                onStatusChange: (status, error) => updateStats('twitch', { status, errorMessage: error }),
-                onModeration: (event) => onModerationRef.current?.(event),
-                onAvatars: (avatars) => onAvatarsRef.current?.(avatars),
-                logDebug: (category, message) => {
-                    if (!live.current.authReady) return;
-                    syncService.logHypeTrainEvent(category, message, false);
-                },
-            });
-            twitchClient.current.connect();
-        }
-
-        // YouTube Connection
-        if (settings.youtubeApiKey && settings.youtubeVideoId) {
-            youtubeClient.current = new YouTubeChatClient(
-                settings.youtubeApiKey,
-                settings.youtubeVideoId,
-                (msg) => addMessage(msg),
-                (status, error) => {
-                    updateStats('youtube', {
-                        status: status,
-                        errorMessage: error
-                    });
-                },
-                incrementQuota,
-                (stats) => updateStats('youtube', stats)
-            );
-            youtubeClient.current.connect();
-        }
+        const token = tokenRef.current || '';
+        activeTwitchToken.current = token;
+        const client = new TwitchChatClient({
+            channel: settings.twitchChannel,
+            accessToken: token,
+            clientId: settings.twitchClientId,
+            onMessage: (msg) => {
+                if (msg.eventType === 'subscription' && !live.current.showSubscriptions) return;
+                addMessage(msg);
+            },
+            onStatsUpdate: (stats) => updateStats('twitch', stats),
+            onHypeTrainUpdate: (hypeTrainData) => {
+                if (!live.current.showHypeTrain) return;
+                // While a simulation runs, only a real active train may replace it.
+                if (hypeTrainRef.current?.isTest && hypeTrainRef.current?.isActive && !hypeTrainData) return;
+                if (live.current.authReady) syncService.setHypeTrain(hypeTrainData);
+            },
+            onStatusChange: (status, error) => updateStats('twitch', { status, errorMessage: error }),
+            onModeration: (event) => onModerationRef.current?.(event),
+            onAvatars: (avatars) => onAvatarsRef.current?.(avatars),
+            logDebug: (category, message) => {
+                if (!live.current.authReady) return;
+                syncService.logHypeTrainEvent(category, message, false);
+            },
+        });
+        twitchClient.current = client;
+        client.connect();
 
         return () => {
-            twitchClient.current?.disconnect();
-            youtubeClient.current?.disconnect();
+            client.disconnect();
+            if (twitchClient.current === client) twitchClient.current = null;
         };
-    }, [
-        settings.twitchChannel,
-        settings.youtubeApiKey,
-        settings.youtubeVideoId,
-        addMessage,
-        updateStats,
-        incrementQuota,
-        settings.twitchAccessToken,
-        settings.twitchClientId,
-        readOnly
-    ]);
+    }, [settings.twitchChannel, settings.twitchClientId, twitchGeneration, readOnly, addMessage, updateStats]);
+
+    // A new token: hand it to the running client if it's the same Twitch account
+    // (a routine refresh — no reconnect, no missed events); otherwise start over.
+    useEffect(() => {
+        if (readOnly) return;
+        const token = settings.twitchAccessToken || '';
+        if (token === activeTwitchToken.current) return;
+        const client = twitchClient.current;
+        if (!client || !token) {
+            setTwitchGeneration(g => g + 1);
+            return;
+        }
+        let cancelled = false;
+        client.updateToken(token).then(swapped => {
+            if (cancelled) return;
+            if (swapped) activeTwitchToken.current = token;
+            else setTwitchGeneration(g => g + 1);
+        });
+        return () => { cancelled = true; };
+    }, [settings.twitchAccessToken, readOnly]);
+
+    // ── YouTube ──────────────────────────────────────────────────────────────
+    useEffect(() => {
+        if (readOnly) return;
+        const configured = !!(settings.youtubeApiKey && settings.youtubeVideoId);
+        updateStats('youtube', configured
+            ? { status: 'connecting', errorMessage: undefined, isLive: undefined }
+            : { viewers: 0, status: 'offline', title: 'Not connected', errorMessage: undefined, isLive: undefined });
+        if (!configured) return;
+
+        const client = new YouTubeChatClient(
+            settings.youtubeApiKey,
+            settings.youtubeVideoId,
+            (msg) => addMessage(msg),
+            (status, error) => updateStats('youtube', { status, errorMessage: error }),
+            incrementQuota,
+            (stats) => updateStats('youtube', stats)
+        );
+        youtubeClient.current = client;
+        client.connect();
+
+        return () => {
+            client.disconnect();
+            if (youtubeClient.current === client) youtubeClient.current = null;
+        };
+    }, [settings.youtubeApiKey, settings.youtubeVideoId, readOnly, addMessage, updateStats, incrementQuota]);
 
     const simulateHypeTrain = (data: HypeTrainData | null) => {
         if (!authReady) return;
