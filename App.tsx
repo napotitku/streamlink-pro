@@ -12,6 +12,7 @@ import { useChatConnection } from '@/src/hooks/useChatConnection';
 import { useFirebaseAuth } from '@/src/hooks/useFirebaseAuth';
 import AuthHandler from './components/AuthHandler';
 import { useTwitchAuth } from '@/src/hooks/useTwitchAuth';
+import { useKocouriAuth } from '@/src/hooks/useKocouriAuth';
 import { validateTwitchToken } from '@/services/twitchService';
 
 const App: React.FC = () => {
@@ -36,6 +37,9 @@ const App: React.FC = () => {
     updateAvatars
   } = useMessageStore(settings, { restoreFeatured: !isOverlay });
 
+  // Kocouří díra's own sign-in; the overlay never uses it.
+  const kocouri = useKocouriAuth(!isOverlay && authReady && isAuthorized);
+
   const { twitchClient, youtubeClient, hypeTrain, simulateHypeTrain } = useChatConnection({
     settings,
     addMessage,
@@ -45,7 +49,8 @@ const App: React.FC = () => {
     authReady: authReady && (isOverlay || isAuthorized),
     readOnly: isOverlay,
     onModeration: applyModeration,
-    onAvatars: updateAvatars
+    onAvatars: updateAvatars,
+    kocouriUid: kocouri.user?.uid ?? null
   });
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -119,7 +124,8 @@ const App: React.FC = () => {
 
     for (let i = 0; i < 5; i++) {
       setTimeout(() => {
-        const platform = Math.random() > 0.5 ? 'twitch' : 'youtube';
+        const platforms: Platform[] = ['twitch', 'youtube', 'kocouri'];
+        const platform = platforms[Math.floor(Math.random() * platforms.length)];
         const author = dummyNames[Math.floor(Math.random() * dummyNames.length)];
         const text = dummyTexts[Math.floor(Math.random() * dummyTexts.length)];
 
@@ -127,12 +133,12 @@ const App: React.FC = () => {
           id: Math.random().toString(36).substring(7),
           author,
           text,
-          platform: platform as Platform,
+          platform,
           timestamp: new Date(),
           isRead: false,
           isFeatured: false,
           avatarUrl: `https://api.dicebear.com/7.x/identicon/svg?seed=${author}`,
-          authorColor: platform === 'twitch' ? '#bf94ff' : '#ff4d4d',
+          authorColor: platform === 'twitch' ? '#bf94ff' : platform === 'kocouri' ? '#f3ae38' : '#ff4d4d',
           isFirstMessage: Math.random() > 0.8
         };
         addMessage(msg);
@@ -246,6 +252,7 @@ const App: React.FC = () => {
               shortcutsEnabled={!isSettingsOpen && !showLaunchPrompt}
               onOpenSettings={() => setIsSettingsOpen(true)}
               onTwitchLogin={handleTwitchLogin}
+              kocouri={kocouri}
             />
           }
         />
@@ -347,6 +354,7 @@ const App: React.FC = () => {
           }}
           onClose={() => setIsSettingsOpen(false)}
           onTwitchLogout={twitchAuth.logout}
+          kocouri={kocouri}
           onSimulateDonation={simulateDonation}
           onSimulateHypeTrain={handleSimulateHypeTrain}
           onSimulateSubscription={simulateSubscription}

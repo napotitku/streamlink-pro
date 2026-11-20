@@ -6,7 +6,8 @@ import MessageItem from './MessageItem';
 import { PinnedMessagesWidget } from './PinnedMessagesWidget';
 import StatusMenu from './StatusMenu';
 import { OverlayScene, ScaledStage } from './OverlayScene';
-import { TwitchIcon, YouTubeIcon } from './icons/PlatformIcons';
+import { KocouriIcon, TwitchIcon, YouTubeIcon } from './icons/PlatformIcons';
+import type { KocouriAuth } from '@/src/hooks/useKocouriAuth';
 import { useNow } from '@/src/hooks/useNow';
 
 interface DashboardProps {
@@ -22,6 +23,7 @@ interface DashboardProps {
   onClearFeatured: () => void;
   onOpenSettings: () => void;
   onTwitchLogin: () => void;
+  kocouri: KocouriAuth;
 }
 
 type Filter = 'all' | 'unread' | 'money' | 'subs' | 'starred';
@@ -50,6 +52,20 @@ const ViewerPill: React.FC<{ platform: 'twitch' | 'youtube'; stats: StreamStats;
         {unknown ? '—' : stats.viewers.toLocaleString()}
       </span>
       <span className="text-[11px] text-slate-500">viewers</span>
+    </div>
+  );
+};
+
+/** Kocouří díra has no viewer count: the pill shows the thread it reads, or why it can't. */
+const KocouriPill: React.FC<{ stats: StreamStats }> = ({ stats }) => {
+  const reading = stats.status === 'online';
+  const live = reading && !!stats.isLive;
+  const label = reading ? stats.title : stats.status === 'connecting' ? 'Connecting…' : (stats.errorMessage || stats.title);
+  return (
+    <div className="flex items-center gap-2.5 pl-2.5 pr-3 py-1.5 rounded-xl border border-slate-800 bg-slate-950 max-w-[260px]" title={stats.errorMessage || stats.title || undefined}>
+      <KocouriIcon className="w-4 h-4 shrink-0 text-[#f3ae38] fill-current" />
+      <span className={`w-2 h-2 shrink-0 rounded-full ${live ? 'bg-red-500 shadow-[0_0_0_3px_rgba(239,68,68,0.25)]' : reading ? 'bg-emerald-400' : stats.status === 'error' ? 'bg-amber-400' : 'bg-slate-600'}`} aria-label={live ? 'Live' : reading ? 'Reading the thread' : 'Not reading'} />
+      <span className={`text-[12px] font-semibold truncate ${reading ? 'text-slate-200' : 'text-slate-500'}`}>{label}</span>
     </div>
   );
 };
@@ -177,7 +193,7 @@ const isTypingTarget = (el: EventTarget | null) => {
 
 const Dashboard: React.FC<DashboardProps> = ({
   state, hypeTrain, shortcutsEnabled,
-  onFeature, onMarkRead, onMarkTrash, onToggleInteresting, onToggleQueue, onClearFeatured, onOpenSettings, onTwitchLogin,
+  onFeature, onMarkRead, onMarkTrash, onToggleInteresting, onToggleQueue, onClearFeatured, onOpenSettings, onTwitchLogin, kocouri,
 }) => {
   const [filter, setFilter] = useState<Filter>('all');
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -250,6 +266,7 @@ const Dashboard: React.FC<DashboardProps> = ({
 
   const twitchConfigured = !!settings.twitchChannel;
   const youtubeConfigured = !!(settings.youtubeApiKey && settings.youtubeVideoId);
+  const kocouriConfigured = !!kocouri.user;
   const needsTwitchLogin = twitchConfigured && (!!state.stats.twitch.authIssue || !settings.twitchAccessToken);
 
   return (
@@ -263,6 +280,7 @@ const Dashboard: React.FC<DashboardProps> = ({
         <div className="flex flex-wrap items-center gap-2">
           <ViewerPill platform="twitch" stats={state.stats.twitch} configured={twitchConfigured} />
           <ViewerPill platform="youtube" stats={state.stats.youtube} configured={youtubeConfigured} />
+          {kocouriConfigured && <KocouriPill stats={state.stats.kocouri} />}
         </div>
         <div className="ml-auto flex items-center gap-2">
           {needsTwitchLogin && (
@@ -273,6 +291,8 @@ const Dashboard: React.FC<DashboardProps> = ({
           <StatusMenu
             twitch={state.stats.twitch}
             youtube={state.stats.youtube}
+            kocouri={state.stats.kocouri}
+            kocouriAuth={kocouri}
             twitchChannel={settings.twitchChannel}
             youtubeConfigured={youtubeConfigured}
             quotaUsage={state.quotaUsage}
@@ -314,11 +334,11 @@ const Dashboard: React.FC<DashboardProps> = ({
               <Layers size={36} className="opacity-30" />
               <p className="text-base font-bold text-slate-300">No messages yet</p>
               <p className="text-sm max-w-xs">
-                {twitchConfigured || youtubeConfigured
+                {twitchConfigured || youtubeConfigured || kocouriConfigured
                   ? 'Chat shows up here as soon as someone writes.'
-                  : 'Log in to Twitch or add a YouTube stream in Settings to start.'}
+                  : 'Log in to Twitch, add a YouTube stream or sign in to Kocouří díra in Settings to start.'}
               </p>
-              {!twitchConfigured && !youtubeConfigured && (
+              {!twitchConfigured && !youtubeConfigured && !kocouriConfigured && (
                 <button type="button" onClick={onOpenSettings} className="mt-2 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold">Open settings</button>
               )}
             </div>

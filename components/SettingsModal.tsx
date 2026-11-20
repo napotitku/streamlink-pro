@@ -2,6 +2,9 @@
 import React, { useState } from 'react';
 import { AppSettings } from '../types';
 import { startTwitchLogin } from '@/src/twitchAuth';
+import type { KocouriAuth } from '@/src/hooks/useKocouriAuth';
+import { KocouriIcon } from '@/components/icons/PlatformIcons';
+import { KOCOURI_SITE } from '@/services/kocouriService';
 import { X, Save, Key, Twitch, Info, ShieldCheck, Beaker, Clock, Radio, Settings, Zap, Star, LogIn, LogOut } from 'lucide-react';
 
 interface SettingsModalProps {
@@ -12,6 +15,7 @@ interface SettingsModalProps {
   onClose: () => void;
   /** Logs out of Twitch, including the login saved on the server. */
   onTwitchLogout?: () => void;
+  kocouri: KocouriAuth;
   onSimulateDonation?: (amount: string, color: string, duration: number) => void;
   onSimulateHypeTrain?: () => void;
   onSimulateSubscription?: (plan: string, months: number, isGift: boolean) => void;
@@ -19,7 +23,7 @@ interface SettingsModalProps {
 
 type Tab = 'stream' | 'interaction' | 'dev';
 
-const SettingsModal: React.FC<SettingsModalProps> = ({ settings, currentQuota, onTriggerTest, onSave, onClose, onTwitchLogout, onSimulateDonation, onSimulateHypeTrain, onSimulateSubscription }) => {
+const SettingsModal: React.FC<SettingsModalProps> = ({ settings, currentQuota, onTriggerTest, onSave, onClose, onTwitchLogout, kocouri, onSimulateDonation, onSimulateHypeTrain, onSimulateSubscription }) => {
   const [formData, setFormData] = useState<AppSettings>(settings);
   const [manualQuota, setManualQuota] = useState<number>(currentQuota);
   const [activeTab, setActiveTab] = useState<Tab>('stream');
@@ -150,6 +154,63 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, currentQuota, o
                       onChange={e => setFormData({ ...formData, youtubeVideoId: e.target.value })}
                     />
                   </div>
+                </div>
+              </div>
+
+              <div className="h-px bg-slate-800/50" />
+
+              {/* Kocouří díra: the live stream's thread */}
+              <div className="space-y-4">
+                <div className="flex items-center gap-2 text-[#f3ae38] font-black text-xs uppercase tracking-widest">
+                  <KocouriIcon className="w-4 h-4 fill-current" /> Kocouří díra Thread
+                </div>
+
+                <div className="flex items-center justify-between gap-3 bg-slate-950/50 border border-slate-800 rounded-xl p-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className={`w-2 h-2 shrink-0 rounded-full ${kocouri.user ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-red-500'}`}></div>
+                    <div className="flex flex-col min-w-0">
+                      <span className="text-white text-xs font-bold truncate">
+                        {kocouri.user ? `Signed in as ${kocouri.user.email ?? kocouri.user.displayName ?? 'member'}` : 'Not signed in'}
+                      </span>
+                      <span className={`text-[10px] ${kocouri.error ? 'text-red-400' : 'text-slate-500'}`}>
+                        {kocouri.error ?? (kocouri.user
+                          ? 'Streams in a staff room need the owner or a moderator'
+                          : 'Use the Google account of your Kocouří díra membership')}
+                      </span>
+                    </div>
+                  </div>
+                  {kocouri.user ? (
+                    <button
+                      onClick={() => kocouri.signOut()}
+                      className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-500 border border-red-500/20 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all"
+                    >
+                      <LogOut size={12} /> Sign Out
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => kocouri.signIn()}
+                      disabled={kocouri.busy}
+                      className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 bg-[#521a00] hover:bg-[#6a2200] text-[#f3ae38] rounded-lg text-[10px] font-black uppercase tracking-wider transition-all active:scale-95 disabled:opacity-60"
+                    >
+                      <LogIn size={12} /> {kocouri.busy ? 'Signing in…' : 'Sign in'}
+                    </button>
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-[10px] text-slate-500 font-bold uppercase tracking-wider ml-1 flex items-center gap-1.5">
+                    Thread Link (optional)
+                    <span title="Empty: reads the thread of the live stream planned in Kocouří díra (Chat › Živé vysílání), nearest to now. Paste a thread's link to read that one instead.">
+                      <Info size={12} className="text-slate-600" />
+                    </span>
+                  </label>
+                  <input
+                    type="text"
+                    placeholder={`${KOCOURI_SITE}/mistnosti/…/vlakno/…`}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-4 text-white placeholder:text-slate-700 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all font-medium"
+                    value={formData.kocouriThreadLink}
+                    onChange={e => setFormData({ ...formData, kocouriThreadLink: e.target.value })}
+                  />
                 </div>
               </div>
             </div>

@@ -1,5 +1,6 @@
 
-export type Platform = 'twitch' | 'youtube';
+/** `kocouri`: the thread of a live stream in Kocouří díra (services/kocouriService.ts). */
+export type Platform = 'twitch' | 'youtube' | 'kocouri';
 
 export interface ChatMessage {
   id: string;
@@ -24,6 +25,8 @@ export interface ChatMessage {
   subscription?: SubscriptionData;
   /** Viewer count for `eventType: 'raid'`. */
   raidViewers?: number;
+  /** Kocouří díra hides a message with SPOILER in capitals until it's tapped. */
+  isSpoiler?: boolean;
 }
 
 export interface StreamStats {
@@ -43,6 +46,8 @@ export interface AppSettings {
   twitchChannel: string;
   youtubeVideoId: string;
   youtubeApiKey: string;
+  /** A Kocouří díra thread's link to read; empty follows the planned live stream. Not saved. */
+  kocouriThreadLink: string;
   showAvatars: boolean;
   fontSize: number;
   autoDismissEnabled: boolean;

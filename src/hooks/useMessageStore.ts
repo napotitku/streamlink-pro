@@ -27,6 +27,7 @@ export const useMessageStore = (
         stats: {
             twitch: { viewers: 0, status: 'offline', title: 'Not connected' },
             youtube: { viewers: 0, status: 'offline', title: 'Not connected' },
+            kocouri: { viewers: 0, status: 'offline', title: 'Not connected' },
         },
     });
     // Synchronous view of the latest state for the action functions.

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ExternalLink, LogIn } from 'lucide-react';
+import { ExternalLink, LogIn, LogOut } from 'lucide-react';
 import { StreamStats } from '../types';
+import type { KocouriAuth } from '@/src/hooks/useKocouriAuth';
 
 export const QUOTA_LIMIT = 10000;
 /** useTwitchAuth renews the token this long before it expires. */
@@ -35,6 +36,8 @@ const Row: React.FC<{ level: Level; label: string; children: React.ReactNode }> 
 interface StatusMenuProps {
     twitch: StreamStats;
     youtube: StreamStats;
+    kocouri: StreamStats;
+    kocouriAuth: KocouriAuth;
     twitchChannel: string;
     youtubeConfigured: boolean;
     quotaUsage: number;
@@ -45,7 +48,7 @@ interface StatusMenuProps {
 const chatLevel = (s: StreamStats, configured: boolean): Level =>
     !configured ? 'idle' : s.status === 'online' ? 'ok' : s.status === 'connecting' ? 'warn' : s.status === 'error' ? 'error' : 'idle';
 
-const StatusMenu: React.FC<StatusMenuProps> = ({ twitch, youtube, twitchChannel, youtubeConfigured, quotaUsage, onTwitchLogin, onOpenSettings }) => {
+const StatusMenu: React.FC<StatusMenuProps> = ({ twitch, youtube, kocouri, kocouriAuth, twitchChannel, youtubeConfigured, quotaUsage, onTwitchLogin, onOpenSettings }) => {
     const [open, setOpen] = useState(false);
     const rootRef = useRef<HTMLDivElement>(null);
 
@@ -68,7 +71,11 @@ const StatusMenu: React.FC<StatusMenuProps> = ({ twitch, youtube, twitchChannel,
     const quotaPct = Math.min(100, (quotaUsage / QUOTA_LIMIT) * 100);
     const quotaLevel: Level = quotaPct >= 100 ? 'error' : quotaPct > 80 ? 'warn' : 'ok';
 
-    const levels = [twitchChat, loginLevel, ytChat, youtubeConfigured ? quotaLevel : 'idle'];
+    const kocouriConfigured = !!kocouriAuth.user;
+    // "No live stream planned" is the normal state between streams, not a problem.
+    const kdChat: Level = !kocouriConfigured ? (kocouriAuth.error ? 'error' : 'idle') : kocouri.status === 'online' ? 'ok' : kocouri.status === 'connecting' ? 'warn' : kocouri.status === 'error' ? 'error' : 'idle';
+
+    const levels = [twitchChat, loginLevel, ytChat, youtubeConfigured ? quotaLevel : 'idle', kdChat];
     const overall: Level = levels.includes('error') ? 'error' : levels.includes('warn') ? 'warn' : levels.includes('ok') ? 'ok' : 'idle';
     const problems = levels.filter(l => l === 'error' || l === 'warn').length;
 
@@ -113,7 +120,28 @@ const StatusMenu: React.FC<StatusMenuProps> = ({ twitch, youtube, twitchChannel,
                     <div className="h-1.5 w-full rounded-full bg-slate-950 overflow-hidden">
                         <div className={`h-full ${quotaLevel === 'error' ? 'bg-red-500' : quotaLevel === 'warn' ? 'bg-amber-400' : 'bg-indigo-500'}`} style={{ width: `${quotaPct}%` }} />
                     </div>
-                    <div className="flex justify-between mt-2 text-[11px]">
+
+                    <div className="text-[10px] font-black uppercase tracking-[0.15em] text-slate-500 mt-3 mb-1">Kocouří díra</div>
+                    <Row level={kdChat} label="Thread">
+                        {!kocouriConfigured ? (kocouriAuth.error || 'Not signed in') : kocouri.status === 'online' ? kocouri.title : kocouri.status === 'connecting' ? 'Connecting…' : (kocouri.errorMessage || 'Offline')}
+                    </Row>
+                    {kocouriConfigured ? (
+                        <div className="flex items-center justify-between gap-2 py-1 text-[11px] text-slate-500">
+                            <span className="truncate">{kocouriAuth.user?.email}</span>
+                            <button type="button" onClick={kocouriAuth.signOut} className="shrink-0 flex items-center gap-1 text-slate-400 hover:text-white"><LogOut size={11} /> Sign out</button>
+                        </div>
+                    ) : (
+                        <button
+                            type="button"
+                            onClick={kocouriAuth.signIn}
+                            disabled={kocouriAuth.busy}
+                            className="mt-1 w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-[#521a00] hover:bg-[#6a2200] text-[#f3ae38] text-[11px] font-bold uppercase tracking-wider disabled:opacity-60"
+                        >
+                            <LogIn size={12} /> {kocouriAuth.busy ? 'Signing in…' : 'Sign in with Google'}
+                        </button>
+                    )}
+
+                    <div className="flex justify-between mt-3 text-[11px]">
                         <button type="button" onClick={() => { setOpen(false); onOpenSettings(); }} className="text-indigo-300 hover:underline">Settings</button>
                         <a href="https://console.cloud.google.com/apis/api/youtube.googleapis.com/quotas" target="_blank" rel="noreferrer" className="text-indigo-300 hover:underline flex items-center gap-1">
                             Quota console <ExternalLink size={10} />

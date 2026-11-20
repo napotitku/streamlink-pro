@@ -1,13 +1,14 @@
 import { useRef, useEffect, useState } from 'react';
-import { AppSettings, ChatMessage, StreamStats, HypeTrainData } from '@/types';
+import { AppSettings, ChatMessage, StreamStats, HypeTrainData, Platform } from '@/types';
 import { TwitchChatClient, ModerationEvent } from '@/services/twitchService';
 import { YouTubeChatClient } from '@/services/youtubeService';
+import { KocouriChatClient } from '@/services/kocouriService';
 import { syncService } from '@/services/syncService';
 
 interface UseChatConnectionProps {
     settings: AppSettings;
     addMessage: (msg: ChatMessage) => void;
-    updateStats: (platform: 'twitch' | 'youtube', stats: Partial<StreamStats>) => void;
+    updateStats: (platform: Platform, stats: Partial<StreamStats>) => void;
     incrementQuota: (units: number) => void;
     readOnly?: boolean;
     authReady?: boolean;
@@ -15,9 +16,11 @@ interface UseChatConnectionProps {
     onModeration?: (event: ModerationEvent) => void;
     /** Real Twitch profile pictures, keyed by user ID. */
     onAvatars?: (avatars: Record<string, string>) => void;
+    /** Signed in to Kocouří díra (useKocouriAuth): its live stream's thread is read while set. */
+    kocouriUid?: string | null;
 }
 
-export const useChatConnection = ({ settings, addMessage, updateStats, incrementQuota, readOnly = false, authReady = false, onModeration, onAvatars }: UseChatConnectionProps) => {
+export const useChatConnection = ({ settings, addMessage, updateStats, incrementQuota, readOnly = false, authReady = false, onModeration, onAvatars, kocouriUid = null }: UseChatConnectionProps) => {
     const twitchClient = useRef<TwitchChatClient | null>(null);
     const youtubeClient = useRef<YouTubeChatClient | null>(null);
     const [hypeTrain, setHypeTrain] = useState<HypeTrainData | null>(null);
@@ -136,6 +139,25 @@ export const useChatConnection = ({ settings, addMessage, updateStats, increment
             if (youtubeClient.current === client) youtubeClient.current = null;
         };
     }, [settings.youtubeApiKey, settings.youtubeVideoId, readOnly, addMessage, updateStats, incrementQuota]);
+
+    // ── Kocouří díra (the live stream's thread, read-only) ───────────────────
+    useEffect(() => {
+        if (readOnly) return;
+        updateStats('kocouri', kocouriUid
+            ? { status: 'connecting', errorMessage: undefined, isLive: undefined }
+            : { viewers: 0, status: 'offline', title: 'Not connected', errorMessage: undefined, isLive: false });
+        if (!kocouriUid) return;
+
+        const client = new KocouriChatClient({
+            threadLink: settings.kocouriThreadLink,
+            onMessage: addMessage,
+            onModeration: (event) => onModerationRef.current?.(event),
+            onStatsUpdate: (stats) => updateStats('kocouri', stats),
+            onStatusChange: (status, error) => updateStats('kocouri', { status, errorMessage: error }),
+        });
+        client.connect();
+        return () => client.disconnect();
+    }, [kocouriUid, settings.kocouriThreadLink, readOnly, addMessage, updateStats]);
 
     const simulateHypeTrain = (data: HypeTrainData | null) => {
         if (!authReady) return;

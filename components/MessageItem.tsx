@@ -1,7 +1,7 @@
 import React from 'react';
 import { ChatMessage, SubscriptionData } from '../types';
-import { Sparkles, Star, Check, Coins, Gift, Users, ListPlus, ListX, Radio } from 'lucide-react';
-import { TwitchIcon, YouTubeIcon } from '@/components/icons/PlatformIcons';
+import { Sparkles, Star, Check, Coins, Gift, Users, ListPlus, ListX, Radio, EyeOff } from 'lucide-react';
+import { KocouriIcon, TwitchIcon, YouTubeIcon } from '@/components/icons/PlatformIcons';
 
 export const subscriptionLabel = (sub: SubscriptionData): string => {
   if (sub.isGift) return (sub.giftCount ?? 1) > 1 ? `Gift ×${sub.giftCount}` : 'Gift sub';
@@ -43,6 +43,7 @@ const MessageItem: React.FC<MessageItemProps> = ({
   message, isSelected, queuePosition, onFeature, onMarkRead, onMarkTrash, onToggleInteresting, onToggleQueue,
 }) => {
   const isTwitch = message.platform === 'twitch';
+  const isKocouri = message.platform === 'kocouri';
   const isSub = message.eventType === 'subscription';
   const isRaid = message.eventType === 'raid';
   const isMoney = !!message.donationAmount;
@@ -69,14 +70,14 @@ const MessageItem: React.FC<MessageItemProps> = ({
     >
       <div className="relative w-9 h-9">
         <img src={message.avatarUrl} alt="" className="w-9 h-9 rounded-lg object-cover bg-slate-800" />
-        <span className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-slate-950 flex items-center justify-center ${isTwitch ? 'bg-[#9146FF]' : 'bg-white'}`}>
-          {isTwitch ? <TwitchIcon className="w-2 h-2 text-white fill-current" /> : <YouTubeIcon className="w-2.5 h-2.5" />}
+        <span className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-slate-950 flex items-center justify-center ${isTwitch ? 'bg-[#9146FF]' : isKocouri ? 'bg-[#521a00]' : 'bg-white'}`}>
+          {isTwitch ? <TwitchIcon className="w-2 h-2 text-white fill-current" /> : isKocouri ? <KocouriIcon className="w-2.5 h-2.5 text-[#f3ae38] fill-current" /> : <YouTubeIcon className="w-2.5 h-2.5" />}
         </span>
       </div>
 
       <div className="min-w-0">
         <div className="flex items-baseline flex-wrap gap-x-2 gap-y-1">
-          <span className="font-bold text-[13px] truncate" style={{ color: message.authorColor || (isTwitch ? '#bf94ff' : '#ff6b6b') }}>
+          <span className="font-bold text-[13px] truncate" style={{ color: message.authorColor || (isTwitch ? '#bf94ff' : isKocouri ? '#f3ae38' : '#ff6b6b') }}>
             {message.author}
           </span>
           <time className="text-[10px] font-mono text-slate-500 tabular-nums">
@@ -84,6 +85,7 @@ const MessageItem: React.FC<MessageItemProps> = ({
           </time>
           {message.isFeatured && <Tag className="bg-red-500 text-white"><Radio size={9} /> On air</Tag>}
           {queuePosition && !message.isFeatured && <Tag className="bg-indigo-500/20 text-indigo-300">Up next #{queuePosition}</Tag>}
+          {message.isSpoiler && <Tag className="bg-rose-500/15 text-rose-300"><EyeOff size={9} /> Spoiler</Tag>}
           {message.isFirstMessage && <Tag className="bg-emerald-500/10 text-emerald-400"><Sparkles size={9} /> First chat</Tag>}
           {isSub && message.subscription && <Tag className="bg-purple-500/20 text-purple-300"><Gift size={9} /> {subscriptionLabel(message.subscription)}</Tag>}
           {isRaid && <Tag className="bg-purple-500/20 text-purple-300"><Users size={9} /> Raid · {message.raidViewers ?? 0}</Tag>}

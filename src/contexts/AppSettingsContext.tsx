@@ -16,6 +16,7 @@ const DEFAULT_SETTINGS: AppSettings = {
     twitchAccessToken: '',
     youtubeVideoId: '',
     youtubeApiKey: import.meta.env.VITE_YOUTUBE_API_KEY || '',
+    kocouriThreadLink: '',
     showAvatars: true,
     fontSize: 14,
     autoDismissEnabled: true,
@@ -46,7 +47,8 @@ export const AppSettingsProvider: React.FC<{ children: ReactNode }> = ({ childre
                 // The token only ever comes from the user's own Twitch login (see src/twitchAuth.ts).
                 twitchAccessToken: loadTwitchToken(),
                 twitchChannel: parsed.twitchChannel || envChannel || '',
-                youtubeVideoId: '' // Always reset video ID on load
+                youtubeVideoId: '', // Always reset video ID on load
+                kocouriThreadLink: '', // Each stream is found anew
             };
         } catch (e) {
             return DEFAULT_SETTINGS;
@@ -75,6 +77,7 @@ export const AppSettingsProvider: React.FC<{ children: ReactNode }> = ({ childre
         // every load; the Twitch login token is stored per-tab in sessionStorage below.
         const {
             youtubeVideoId,       // always reset on load
+            kocouriThreadLink,    // always reset on load
             twitchAccessToken,    // OAuth token — never in localStorage
             twitchClientId,       // API credential
             youtubeApiKey,        // API credential

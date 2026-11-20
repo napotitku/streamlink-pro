@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Gift, Users, Zap } from 'lucide-react';
 import { ChatMessage, HypeTrainData } from '../types';
-import { TwitchIcon, YouTubeIcon } from '@/components/icons/PlatformIcons';
+import { KocouriIcon, TwitchIcon, YouTubeIcon } from '@/components/icons/PlatformIcons';
 import { subscriptionLabel } from '@/components/MessageItem';
 import { useNow } from '@/src/hooks/useNow';
 
@@ -26,7 +26,7 @@ export const accentFor = (msg: ChatMessage | null): string => {
         if (amount >= 200) return '#0891b2';
         return '#059669';
     }
-    return msg.platform === 'twitch' ? '#9146ff' : '#ff0000';
+    return msg.platform === 'twitch' ? '#9146ff' : msg.platform === 'kocouri' ? '#f3ae38' : '#ff0000';
 };
 
 const formatClock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
@@ -85,7 +85,7 @@ export const OverlayScene: React.FC<OverlaySceneProps> = ({ message, visible, hy
     const now = useNow(200, showCountdown);
     const remaining = showCountdown ? Math.max(0, 1 - (now - featuredAt!) / (durationSeconds * 1000)) : 0;
     const accent = accentFor(message);
-    const isTwitch = message?.platform === 'twitch';
+    const platform = message?.platform;
 
     return (
         <div className="absolute inset-0 overflow-hidden pointer-events-none" style={{ width: STAGE_W, height: STAGE_H }}>
@@ -106,8 +106,10 @@ export const OverlayScene: React.FC<OverlaySceneProps> = ({ message, visible, hy
                         </div>
                         <div className="flex-1 min-w-0 flex flex-col gap-3 p-7">
                             <div className="flex items-center gap-4 min-w-0">
-                                <span className="shrink-0 flex items-center justify-center w-11 h-11 rounded-xl" style={{ backgroundColor: isTwitch ? '#9146ff' : '#1f1f1f' }}>
-                                    {isTwitch ? <TwitchIcon className="w-6 h-6 text-white fill-current" /> : <YouTubeIcon className="w-7 h-7" />}
+                                <span className="shrink-0 flex items-center justify-center w-11 h-11 rounded-xl" style={{ backgroundColor: platform === 'twitch' ? '#9146ff' : platform === 'kocouri' ? '#521a00' : '#1f1f1f' }}>
+                                    {platform === 'twitch' ? <TwitchIcon className="w-6 h-6 text-white fill-current" />
+                                        : platform === 'kocouri' ? <KocouriIcon className="w-7 h-7 text-[#f3ae38] fill-current" />
+                                        : <YouTubeIcon className="w-7 h-7" />}
                                 </span>
                                 <span className="text-[34px] font-black uppercase tracking-wide text-white truncate obs-text-shadow">{message.author}</span>
                                 <Badge msg={message} />
